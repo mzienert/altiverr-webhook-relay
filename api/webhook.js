@@ -1,21 +1,22 @@
+// Minimal webhook handler for Calendly to SQS
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 
-// Initialize SQS with minimal configuration
+// Initialize SQS
 const sqs = new AWS.SQS({
-  region: process.env.AWS_REGION,
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  region: process.env.AWS_REGION
 });
 
+// Environment variables
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
-const CALENDLY_WEBHOOK_SIGNING_KEY = process.env.CALENDLY_WEBHOOK_SIGNING_KEY;
+const SIGNING_KEY = process.env.CALENDLY_WEBHOOK_SIGNING_KEY;
 
-function verifyCalendlySignature(payload, signature, timestamp) {
+// Signature verification
+function verifySignature(payload, signature, timestamp) {
   try {
     const signaturePayload = `${timestamp}.${payload}`;
     const expectedSignature = crypto
-      .createHmac('sha256', CALENDLY_WEBHOOK_SIGNING_KEY)
+      .createHmac('sha256', SIGNING_KEY)
       .update(signaturePayload)
       .digest('hex');
     
@@ -36,15 +37,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Log environment variables (redacted)
-    console.log('Environment check:', {
-      hasRegion: !!process.env.AWS_REGION,
-      hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
-      hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
-      hasQueueUrl: !!process.env.SQS_QUEUE_URL
-    });
-
-    // Verify webhook signature
+    console.log('Webhook received');
+    
+    // Verify signature
     const signature = req.headers['x-calendly-signature'];
     const timestamp = req.headers['x-calendly-timestamp'];
     
@@ -53,39 +48,39 @@ export default async function handler(req, res) {
     }
 
     const rawBody = JSON.stringify(req.body);
-    if (!verifyCalendlySignature(rawBody, signature, timestamp)) {
+    if (!verifySignature(rawBody, signature, timestamp)) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    // Extract webhook data
-    const webhookData = req.body;
-    
-    // Create deduplication ID from event data
+    // Generate unique deduplication ID
     const deduplicationId = crypto
       .createHash('sha256')
-      .update(`${webhookData.time}-${webhookData.event}-${Date.now()}`)
+      .update(`${Date.now()}-${Math.random()}`)
       .digest('hex');
-
-    // Create clean message body manually
+    
+    // Create clean message body
     const messageBody = JSON.stringify({
-      event: webhookData.event,
-      time: webhookData.time,
-      payload: webhookData.payload
+      event: req.body.event,
+      time: req.body.time,
+      payload: req.body.payload
     });
 
-    // Construct parameters exactly as in our working test script
-    const params = {
+    // Explicitly define the exact parameters SQS expects
+    // Use a new object literal, not an object that might have prototype properties
+    const messageParams = Object.create(null);
+    messageParams.QueueUrl = QUEUE_URL;
+    messageParams.MessageBody = messageBody; 
+    messageParams.MessageGroupId = "calendly-events";
+    messageParams.MessageDeduplicationId = deduplicationId;
+    
+    console.log('Sending message to SQS with params:', {
       QueueUrl: QUEUE_URL,
-      MessageBody: messageBody,
       MessageGroupId: "calendly-events",
-      MessageDeduplicationId: deduplicationId
-    };
+      MessageDeduplicationId: deduplicationId.substring(0, 10) + '...'
+    });
 
-    // Log prepared parameters for debugging
-    console.log('Sending to SQS with params:', JSON.stringify(params));
-
-    // Send message to SQS
-    const result = await sqs.sendMessage(params).promise();
+    // Send message
+    const result = await sqs.sendMessage(messageParams).promise();
     console.log('SQS response:', result);
     
     return res.status(200).json({ 
@@ -96,7 +91,7 @@ export default async function handler(req, res) {
     console.error('Webhook error:', {
       message: error.message,
       code: error.code,
-      stack: error.stack && error.stack.split('\n').slice(0, 3).join('\n')
+      stack: error.stack ? error.stack.split('\n')[0] : null
     });
     
     return res.status(500).json({ 

@@ -4,6 +4,7 @@ const crypto = require('crypto');
 // Enable AWS SDK logging
 AWS.config.logger = console;
 
+// Initialize SQS with minimal configuration
 const sqs = new AWS.SQS({
   region: process.env.AWS_REGION,
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -12,28 +13,6 @@ const sqs = new AWS.SQS({
 
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const CALENDLY_WEBHOOK_SIGNING_KEY = process.env.CALENDLY_WEBHOOK_SIGNING_KEY;
-
-// Helper function to recursively strip any 'Id' keys from an object
-function stripIdFields(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  
-  // Handle arrays
-  if (Array.isArray(obj)) {
-    return obj.map(item => stripIdFields(item));
-  }
-
-  // Handle objects
-  const result = {};
-  for (const [key, value] of Object.entries(obj)) {
-    // Skip 'Id' keys at any level
-    if (key === 'Id' || key === 'id') continue;
-    
-    // Recursively process nested objects
-    result[key] = stripIdFields(value);
-  }
-  
-  return result;
-}
 
 function verifyCalendlyWebhookSignature(payload, signature, timestamp) {
   const signaturePayload = `${timestamp}.${payload}`;
@@ -88,31 +67,38 @@ export default async function handler(req, res) {
       .digest('hex');
 
     // Debug the incoming payload
-    console.log('Webhook payload (updated code):', JSON.stringify(payload));
+    console.log('Webhook payload (raw):', rawBody);
 
-    // Prepare a clean message body with all Id fields removed
-    const messageBody = stripIdFields({
+    // Create message body as a simple, flat object
+    const messageContent = JSON.stringify({
       event: payload.event,
       time: payload.time,
       payload: payload.payload
     });
 
-    console.log('Sanitized message body:', JSON.stringify(messageBody));
+    console.log('Message content:', messageContent);
 
-    // Define the clean params object
-    const params = {
+    // IMPORTANT: Only use the exact parameters expected by SQS sendMessage
+    // Explicitly creating a new object with only the required fields
+    const sqsParams = {
       QueueUrl: QUEUE_URL,
-      MessageBody: JSON.stringify(messageBody),
+      MessageBody: messageContent,
       MessageGroupId: "calendly-events",
       MessageDeduplicationId: deduplicationId
     };
 
-    // Check the final params for any unexpected Id fields
-    console.log('Final SQS params:', JSON.stringify(params));
+    // Convert to JSON string and back to ensure no unexpected properties
+    const paramsString = JSON.stringify(sqsParams);
+    console.log('SQS params as JSON string:', paramsString);
+    
+    // Parse back to object to ensure clean structure
+    const cleanParams = JSON.parse(paramsString);
+    console.log('Clean SQS params:', cleanParams);
 
     try {
-      console.log('Sending message to SQS...');
-      const result = await sqs.sendMessage(params).promise();
+      console.log('Attempting to send message to SQS with clean params...');
+      // Use the cleanParams object instead of the original params
+      const result = await sqs.sendMessage(cleanParams).promise();
       console.log('Successfully sent message to SQS:', result);
       res.status(200).json({ success: true, messageId: result.MessageId });
     } catch (sqsError) {
@@ -124,9 +110,12 @@ export default async function handler(req, res) {
         time: sqsError.time,
         region: process.env.AWS_REGION,
         hostname: sqsError.hostname,
-        retryable: sqsError.retryable,
-        stack: sqsError.stack
+        retryable: sqsError.retryable
       });
+      
+      // Log the exact error with stringify to see full error details
+      console.error('Full SQS error:', JSON.stringify(sqsError, null, 2));
+      
       throw sqsError;
     }
   } catch (err) {
@@ -134,9 +123,9 @@ export default async function handler(req, res) {
       error: err.message,
       code: err.code,
       statusCode: err.statusCode,
-      requestId: err.requestId,
-      stack: err.stack
+      requestId: err.requestId
     });
+    
     res.status(500).json({ 
       error: 'Failed to queue message',
       details: err.message,

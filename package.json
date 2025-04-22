@@ -1,0 +1,23 @@
+{
+  "name": "altiverr-webhook-relay",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/mzienert/altiverr-webhook-relay#readme",
+  "bugs": {
+    "url": "https://github.com/mzienert/altiverr-webhook-relay/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mzienert/altiverr-webhook-relay.git"
+  },
+  "license": "ISC",
+  "author": "Matthew Zienert",
+  "type": "commonjs",
+  "main": "api/webhook.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1370.0"
+  }
+}

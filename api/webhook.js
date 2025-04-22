@@ -65,20 +65,29 @@ export default async function handler(req, res) {
       .update(`${payload.time}-${payload.event}-${JSON.stringify(payload.payload)}`)
       .digest('hex');
 
+    // Debug the incoming payload
+    console.log('Webhook payload:', JSON.stringify(payload));
+
+    // Prepare a clean message body without any Id fields
+    const messageBody = {
+      event: payload.event,
+      time: payload.time,
+      payload: payload.payload
+    };
+
+    // Remove any potential 'id' or 'Id' fields that might be causing issues
+    if (messageBody.payload && messageBody.payload.id) delete messageBody.payload.id;
+    if (messageBody.payload && messageBody.payload.Id) delete messageBody.payload.Id;
+
     console.log('Preparing SQS message:', {
       QueueUrl: QUEUE_URL,
       MessageGroupId: 'calendly-events',
-      MessageDeduplicationId: deduplicationId,
-      payload: payload
+      MessageDeduplicationId: deduplicationId
     });
 
     const params = {
       QueueUrl: QUEUE_URL,
-      MessageBody: JSON.stringify({
-        event: payload.event,
-        time: payload.time,
-        payload: payload.payload
-      }),
+      MessageBody: JSON.stringify(messageBody),
       MessageGroupId: "calendly-events",
       MessageDeduplicationId: deduplicationId
     };

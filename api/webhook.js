@@ -13,6 +13,28 @@ const sqs = new AWS.SQS({
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const CALENDLY_WEBHOOK_SIGNING_KEY = process.env.CALENDLY_WEBHOOK_SIGNING_KEY;
 
+// Helper function to recursively strip any 'Id' keys from an object
+function stripIdFields(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  
+  // Handle arrays
+  if (Array.isArray(obj)) {
+    return obj.map(item => stripIdFields(item));
+  }
+
+  // Handle objects
+  const result = {};
+  for (const [key, value] of Object.entries(obj)) {
+    // Skip 'Id' keys at any level
+    if (key === 'Id' || key === 'id') continue;
+    
+    // Recursively process nested objects
+    result[key] = stripIdFields(value);
+  }
+  
+  return result;
+}
+
 function verifyCalendlyWebhookSignature(payload, signature, timestamp) {
   const signaturePayload = `${timestamp}.${payload}`;
   const expectedSignature = crypto
@@ -66,25 +88,18 @@ export default async function handler(req, res) {
       .digest('hex');
 
     // Debug the incoming payload
-    console.log('Webhook payload:', JSON.stringify(payload));
+    console.log('Webhook payload (updated code):', JSON.stringify(payload));
 
-    // Prepare a clean message body without any Id fields
-    const messageBody = {
+    // Prepare a clean message body with all Id fields removed
+    const messageBody = stripIdFields({
       event: payload.event,
       time: payload.time,
       payload: payload.payload
-    };
-
-    // Remove any potential 'id' or 'Id' fields that might be causing issues
-    if (messageBody.payload && messageBody.payload.id) delete messageBody.payload.id;
-    if (messageBody.payload && messageBody.payload.Id) delete messageBody.payload.Id;
-
-    console.log('Preparing SQS message:', {
-      QueueUrl: QUEUE_URL,
-      MessageGroupId: 'calendly-events',
-      MessageDeduplicationId: deduplicationId
     });
 
+    console.log('Sanitized message body:', JSON.stringify(messageBody));
+
+    // Define the clean params object
     const params = {
       QueueUrl: QUEUE_URL,
       MessageBody: JSON.stringify(messageBody),
@@ -92,7 +107,11 @@ export default async function handler(req, res) {
       MessageDeduplicationId: deduplicationId
     };
 
+    // Check the final params for any unexpected Id fields
+    console.log('Final SQS params:', JSON.stringify(params));
+
     try {
+      console.log('Sending message to SQS...');
       const result = await sqs.sendMessage(params).promise();
       console.log('Successfully sent message to SQS:', result);
       res.status(200).json({ success: true, messageId: result.MessageId });

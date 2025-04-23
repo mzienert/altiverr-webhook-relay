@@ -54,7 +54,7 @@ export default async function handler(req, res) {
   try {
     // Get query parameters
     const maxMessages = Math.min(parseInt(req.query.max || '100'), 10); // Max 10 messages
-    const visibilityTimeout = parseInt(req.query.visibility || '300'); // Default 30 seconds
+    const visibilityTimeout = parseInt(req.query.visibility || '10'); // Default 30 seconds
     const waitTimeSeconds = parseInt(req.query.wait || '0'); // Default 0 seconds (short polling)
     const includeAttributes = req.query.attributes === 'true'; // Include all attributes
     const allStats = req.query.stats === 'true'; // Include queue stats

@@ -4,7 +4,7 @@ const https = require('https');
 const config = {
   clientId: process.env.SLACK_CLIENT_ID,
   clientSecret: process.env.SLACK_CLIENT_SECRET,
-  redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/rest/oauth2-credential/callback'
+  redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback'
 };
 
 export default async function handler(req, res) {

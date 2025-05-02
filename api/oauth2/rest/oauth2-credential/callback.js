@@ -1,18 +1,28 @@
 const https = require('https');
 
+const BASE_URL = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
+
+function getRedirectUri(service) {
+  return process.env.OAUTH_REDIRECT_URI || BASE_URL;
+}
+
 // OAuth2 configuration
 const config = {
   slack: {
     clientId: process.env.SLACK_CLIENT_ID,
     clientSecret: process.env.SLACK_CLIENT_SECRET,
     tokenUrl: 'https://slack.com/api/oauth.v2.access',
-    redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback'
+    get redirectUri() {
+      return getRedirectUri('slack');
+    }
   },
   salesforce: {
     clientId: process.env.SALESFORCE_CLIENT_ID,
     clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
     tokenUrl: 'https://login.salesforce.com/services/oauth2/token',
-    redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback'
+    get redirectUri() {
+      return getRedirectUri('salesforce');
+    }
   }
 };
 
@@ -22,10 +32,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { code, service = 'slack' } = req.query;
+    const { code, service: explicitService } = req.query;
 
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
+    }
+
+    // Detect service based on query parameters if not explicitly provided
+    let service = explicitService;
+    if (!service) {
+      // Salesforce typically includes instance_url or state parameters
+      if (req.query.state?.includes('salesforce') || req.query.instance_url) {
+        service = 'salesforce';
+      } else {
+        // Default to slack if we can't determine the service
+        service = 'slack';
+      }
     }
 
     if (!['slack', 'salesforce'].includes(service)) {

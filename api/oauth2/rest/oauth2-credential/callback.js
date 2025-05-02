@@ -4,6 +4,7 @@ const crypto = require('crypto');
 // Configuration
 const REDIRECT_URI = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
 const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
+const AUTH_URL = 'https://login.salesforce.com/services/oauth2/authorize';
 
 /**
  * Base64URL encoding function as per RFC 7636
@@ -75,6 +76,25 @@ function ensureValidCodeVerifier(verifier) {
   return null;
 }
 
+/**
+ * Generates a proper OAuth authorization URL with PKCE
+ * @param {string} codeVerifier - The code verifier to use
+ * @returns {string} The authorization URL
+ */
+function generateAuthUrl(codeVerifier) {
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: process.env.SALESFORCE_CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
+  });
+  
+  return `${AUTH_URL}?${params.toString()}`;
+}
+
 export default async function handler(req, res) {
   // Only accept GET requests
   if (req.method !== 'GET') {
@@ -121,10 +141,16 @@ export default async function handler(req, res) {
       }
     }
 
+    // Generate a proper authorization URL for debugging
+    if (codeVerifier) {
+      const properAuthUrl = generateAuthUrl(codeVerifier);
+      console.log('For reference, a proper authorization URL would be:', properAuthUrl);
+    }
+
     // Try different approaches in sequence until one works
     const approaches = [];
     
-    // Try without PKCE first - this is the most likely to work with Salesforce
+    // Try standard OAuth without PKCE first
     approaches.push({ name: "Standard OAuth without PKCE", config: { code } });
     
     // If we have a valid code verifier, try PKCE methods
@@ -162,7 +188,7 @@ export default async function handler(req, res) {
     // If we get here, all approaches failed
     return res.status(200).json({ 
       error: 'OAuth authentication failed', 
-      details: 'All authentication approaches failed',
+      details: 'All approaches failed - you MUST disable PKCE in Salesforce Connected App settings',
       lastError: lastError?.message,
       allErrors,
       debugInfo: {
@@ -172,12 +198,14 @@ export default async function handler(req, res) {
         codeVerifierValid: codeVerifier ? /^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier) : false,
         receivedCode: code ? code.substring(0, 10) + '...' : null
       },
-      recommendedActions: [
-        'Run n8n callback with "Require Proof Key for Code Exchange (PKCE)" DISABLED in Salesforce Connected App',
-        'Verify client ID and secret are correct',
-        'Try setting up a completely new Connected App',
-        'Use the Connected App settings exactly as shown in the n8n documentation'
-      ]
+      recommendedActionFromN8n: "According to n8n docs, these settings MUST BE UNCHECKED in your Salesforce Connected App:",
+      requiredSettings: [
+        "Require Proof Key for Code Exchange (PKCE)",
+        "Require Secret for Web Server Flow", 
+        "Require Secret for Refresh Token Flow"
+      ],
+      successfulConnect: false,
+      setupInstructions: "Please visit the Salesforce Connected App settings, uncheck the three settings above, wait a few minutes, and try again."
     });
     
   } catch (error) {

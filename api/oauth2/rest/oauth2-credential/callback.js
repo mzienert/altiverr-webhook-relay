@@ -27,28 +27,31 @@ export default async function handler(req, res) {
         stateData = JSON.parse(Buffer.from(state, 'base64').toString());
         console.log('State data contains:', Object.keys(stateData));
         
-        // Look for code_verifier or similar field in state data
-        if (stateData.code_verifier) {
-          codeVerifier = stateData.code_verifier;
-        } else if (stateData.codeVerifier) {
-          codeVerifier = stateData.codeVerifier;
-        } else if (stateData.verifier) {
-          codeVerifier = stateData.verifier;
-        } else if (stateData.token) {
-          // Some implementations use the token as code_verifier
+        // n8n typically stores the code_verifier as "token" in the state
+        if (stateData.token) {
           codeVerifier = stateData.token;
-        }
-        
-        if (codeVerifier) {
-          console.log('Found potential code_verifier in state data');
+          console.log('Found code_verifier in state data (token field)');
         }
       } catch (e) {
         console.log('Error parsing state:', e);
       }
     }
 
-    // Exchange code for token
-    const tokenData = await exchangeCodeForToken(code, codeVerifier);
+    // First try with PKCE if we have a code_verifier
+    if (codeVerifier) {
+      try {
+        console.log('Attempting token exchange with PKCE...');
+        const tokenData = await exchangeCodeForToken(code, codeVerifier, true);
+        return res.json(tokenData);
+      } catch (error) {
+        console.log('PKCE attempt failed:', error.message);
+        // If PKCE fails, try without it (fallback)
+        console.log('Falling back to standard OAuth flow...');
+      }
+    }
+
+    // Standard OAuth flow without PKCE (fallback)
+    const tokenData = await exchangeCodeForToken(code, null, false);
     
     // Return token to client (n8n)
     return res.json(tokenData);
@@ -62,10 +65,12 @@ export default async function handler(req, res) {
 }
 
 /**
- * Simple function to exchange authorization code for access token
- * Now with support for PKCE code_verifier
+ * Exchange authorization code for an access token
+ * @param {string} code - The authorization code
+ * @param {string|null} codeVerifier - The PKCE code verifier if available
+ * @param {boolean} usePkce - Whether to include the code_verifier in the request
  */
-async function exchangeCodeForToken(code, codeVerifier) {
+async function exchangeCodeForToken(code, codeVerifier, usePkce) {
   return new Promise((resolve, reject) => {
     // Create form data
     const data = new URLSearchParams({
@@ -76,15 +81,13 @@ async function exchangeCodeForToken(code, codeVerifier) {
       redirect_uri: REDIRECT_URI
     });
     
-    // Add code_verifier if available (required for PKCE)
-    if (codeVerifier) {
+    // Add code_verifier if using PKCE
+    if (usePkce && codeVerifier) {
       data.append('code_verifier', codeVerifier);
-      console.log('Including code_verifier in token request');
-    } else {
-      console.log('No code_verifier available, proceeding without PKCE');
+      console.log('Including code_verifier in token request:', codeVerifier.substring(0, 5) + '...');
     }
     
-    console.log('Exchanging code for token...');
+    console.log(`Exchanging code for token${usePkce ? ' with PKCE' : ''}...`);
     
     // Parse token URL
     const url = new URL(TOKEN_URL);
@@ -96,7 +99,8 @@ async function exchangeCodeForToken(code, codeVerifier) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(data.toString())
+        'Content-Length': Buffer.byteLength(data.toString()),
+        'Accept': 'application/json'
       }
     };
     
@@ -104,26 +108,34 @@ async function exchangeCodeForToken(code, codeVerifier) {
     const req = https.request(options, (res) => {
       let responseData = '';
       
+      console.log('Token request status:', res.statusCode);
+      
       res.on('data', (chunk) => {
         responseData += chunk;
       });
       
       res.on('end', () => {
-        if (res.statusCode !== 200) {
-          console.error('Token response error:', res.statusCode, responseData);
-          try {
-            const errorData = JSON.parse(responseData);
-            reject(new Error(errorData.error_description || errorData.error || 'Token request failed'));
-          } catch (e) {
-            reject(new Error(`Token request failed with status: ${res.statusCode}`));
-          }
-          return;
-        }
-        
         try {
-          const tokenData = JSON.parse(responseData);
-          console.log('Token received successfully');
-          resolve(tokenData);
+          const parsedData = JSON.parse(responseData);
+          
+          if (res.statusCode !== 200) {
+            console.error('Token response error:', res.statusCode, parsedData);
+            if (parsedData.error) {
+              reject(new Error(parsedData.error_description || parsedData.error));
+            } else {
+              reject(new Error(`Request failed with status: ${res.statusCode}`));
+            }
+            return;
+          }
+          
+          console.log('Token received successfully:', {
+            has_access_token: !!parsedData.access_token,
+            has_refresh_token: !!parsedData.refresh_token,
+            token_type: parsedData.token_type,
+            instance_url: parsedData.instance_url
+          });
+          
+          resolve(parsedData);
         } catch (error) {
           console.error('Error parsing token response', error);
           reject(new Error('Failed to parse token response'));

@@ -1,5 +1,4 @@
 const https = require('https');
-const crypto = require('crypto');
 
 const BASE_URL = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
 
@@ -19,18 +18,6 @@ const config = {
   }
 };
 
-// PKCE Utilities
-function base64URLEncode(str) {
-  return str.toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-}
-
-function sha256(buffer) {
-  return crypto.createHash('sha256').update(buffer).digest();
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -44,7 +31,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Parse state parameter to get code verifier
+    // Parse state parameter
     let stateData;
     try {
       stateData = JSON.parse(Buffer.from(state, 'base64').toString());
@@ -54,7 +41,7 @@ export default async function handler(req, res) {
     }
 
     // Exchange the authorization code for an access token
-    const tokenResponse = await exchangeCodeForToken(code, stateData);
+    const tokenResponse = await exchangeCodeForToken(code);
 
     // Return the token response in the format n8n expects
     return res.json(tokenResponse);
@@ -67,24 +54,17 @@ export default async function handler(req, res) {
   }
 }
 
-async function exchangeCodeForToken(code, stateData) {
+async function exchangeCodeForToken(code) {
   return new Promise((resolve, reject) => {
     const serviceConfig = config.salesforce;
     
-    // Generate code verifier if not provided
-    const code_verifier = crypto.randomBytes(32).toString('hex');
-    
-    // Calculate code challenge
-    const code_challenge = base64URLEncode(sha256(Buffer.from(code_verifier)));
-    
+    // Basic OAuth parameters without PKCE
     const data = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: serviceConfig.clientId,
       client_secret: serviceConfig.clientSecret,
       code: code,
-      redirect_uri: serviceConfig.redirectUri,
-      code_verifier: code_verifier,
-      code_challenge_method: 'S256'
+      redirect_uri: serviceConfig.redirectUri
     });
 
     const url = new URL(serviceConfig.tokenUrl);
@@ -95,8 +75,6 @@ async function exchangeCodeForToken(code, stateData) {
       redirect_uri: serviceConfig.redirectUri,
       client_id: maskString(serviceConfig.clientId),
       code: maskString(code),
-      code_verifier: maskString(code_verifier),
-      code_challenge: code_challenge,
       grant_type: 'authorization_code'
     });
 

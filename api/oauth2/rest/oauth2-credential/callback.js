@@ -39,16 +39,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Try to extract code_verifier from state if present
-    let code_verifier;
-    try {
-      const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
-      console.log('Parsed state data:', stateData);
-      code_verifier = stateData.codeVerifier;
-    } catch (e) {
-      console.log('Error parsing state for code_verifier:', e);
-    }
-
     // Detect service based on query parameters if not explicitly provided
     let service = explicitService;
     if (!service) {
@@ -99,6 +89,16 @@ async function exchangeCodeForToken(code, service) {
   return new Promise((resolve, reject) => {
     const serviceConfig = config[service];
     
+    // Try to extract code_verifier from state if present
+    let code_verifier;
+    try {
+      const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
+      console.log('Parsed state data:', stateData);
+      code_verifier = stateData.codeVerifier;
+    } catch (e) {
+      console.log('Error parsing state for code_verifier:', e);
+    }
+    
     const data = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: serviceConfig.clientId,
@@ -108,7 +108,7 @@ async function exchangeCodeForToken(code, service) {
     });
 
     // Add PKCE parameters if available
-    if (code_verifier || req.query.code_verifier) {
+    if (code_verifier || req.query?.code_verifier) {
       data.append('code_verifier', code_verifier || req.query.code_verifier);
     }
 
@@ -121,7 +121,7 @@ async function exchangeCodeForToken(code, service) {
       client_id: serviceConfig.clientId,
       client_secret: '(hidden)',
       code: code,
-      code_verifier: req.query.code_verifier || '(not provided)',
+      code_verifier: code_verifier || req.query?.code_verifier || '(not provided)',
       grant_type: 'authorization_code',
       full_payload: data.toString()
     });

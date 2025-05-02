@@ -37,19 +37,42 @@ function generateCodeChallenge(verifier) {
   console.log('Code verifier length:', verifier.length);
   console.log('Code verifier regex match:', /^[A-Za-z0-9\-._~]{43,128}$/.test(verifier));
   
-  // Try both methods to see which works
-  const directHash = base64URLEncode(
+  // Return SHA256 hash
+  return base64URLEncode(
     crypto.createHash('sha256').update(verifier).digest()
   );
+}
+
+/**
+ * Ensures a code verifier meets RFC 7636 requirements
+ * @param {string} verifier - The code verifier to check/fix
+ * @returns {string|null} - A valid code verifier or null if it can't be fixed
+ */
+function ensureValidCodeVerifier(verifier) {
+  // Check if verifier is valid
+  if (!verifier) return null;
   
-  const bufferHash = base64URLEncode(
-    crypto.createHash('sha256').update(Buffer.from(verifier)).digest()
-  );
+  // Check if already valid
+  if (/^[A-Za-z0-9\-._~]{43,128}$/.test(verifier)) {
+    return verifier;
+  }
   
-  console.log('Code challenge (direct):', directHash);
-  console.log('Code challenge (buffer):', bufferHash);
+  // If it's too short, pad it
+  if (verifier.length < 43) {
+    // Use the verifier as a seed to generate additional length
+    const randomBytes = crypto.createHash('sha256').update(verifier).digest('hex');
+    const padding = randomBytes.substring(0, 43 - verifier.length);
+    const paddedVerifier = verifier + padding;
+    console.log('Padded code_verifier to valid length:', paddedVerifier.length);
+    
+    // Ensure it's valid now
+    if (/^[A-Za-z0-9\-._~]{43,128}$/.test(paddedVerifier)) {
+      return paddedVerifier;
+    }
+  }
   
-  return directHash;
+  // If it contains invalid characters or other issues, return null
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -69,21 +92,29 @@ export default async function handler(req, res) {
     // Parse state for code_verifier (n8n might be sending it here)
     let stateData = {};
     let codeVerifier = null;
+    let originalVerifier = null;
     
     if (state) {
       try {
         stateData = JSON.parse(Buffer.from(state, 'base64').toString());
         console.log('State data contains:', Object.keys(stateData));
-        console.log('Complete state data:', JSON.stringify(stateData, null, 2));
         
         // n8n typically stores the code_verifier as "token" in the state
         if (stateData.token) {
-          codeVerifier = stateData.token;
-          console.log('Found code_verifier in state data (token field):', codeVerifier);
+          originalVerifier = stateData.token;
+          console.log('Found code_verifier in state data (token field):', originalVerifier);
           
-          // Generate proper code challenges for debugging
-          const codeChallenge = generateCodeChallenge(codeVerifier);
-          console.log('Generated S256 code challenge:', codeChallenge);
+          // Ensure it's valid according to RFC 7636
+          codeVerifier = ensureValidCodeVerifier(originalVerifier);
+          if (codeVerifier) {
+            console.log('Using valid code_verifier:', codeVerifier);
+            
+            // Generate proper code challenge for debugging
+            const codeChallenge = generateCodeChallenge(codeVerifier);
+            console.log('Generated S256 code challenge:', codeChallenge);
+          } else {
+            console.log('Could not create valid code_verifier from:', originalVerifier);
+          }
         }
       } catch (e) {
         console.log('Error parsing state:', e);
@@ -91,13 +122,23 @@ export default async function handler(req, res) {
     }
 
     // Try different approaches in sequence until one works
-    const approaches = [
-      { name: "Standard OAuth", config: { code } },
-      { name: "PKCE with S256", config: { code, codeVerifier, pkce: true } },
-      { name: "PKCE with 'plain' method", config: { code, codeVerifier, pkce: true, method: "plain" } }
-    ];
+    const approaches = [];
+    
+    // Try without PKCE first - this is the most likely to work with Salesforce
+    approaches.push({ name: "Standard OAuth without PKCE", config: { code } });
+    
+    // If we have a valid code verifier, try PKCE methods
+    if (codeVerifier) {
+      approaches.push({ name: "PKCE with S256", config: { code, codeVerifier, pkce: true } });
+      
+      // Try with original verifier as last resort
+      if (originalVerifier !== codeVerifier) {
+        approaches.push({ name: "PKCE with original verifier", config: { code, codeVerifier: originalVerifier, pkce: true } });
+      }
+    }
 
     let lastError = null;
+    let allErrors = [];
     
     // Try each approach in order
     for (const approach of approaches) {
@@ -105,28 +146,37 @@ export default async function handler(req, res) {
         console.log(`Attempting ${approach.name}...`);
         const tokenData = await exchangeCodeForToken(approach.config);
         console.log(`${approach.name} succeeded!`);
-        return res.json(tokenData);
+        return res.json({
+          ...tokenData,
+          _debug: {
+            successMethod: approach.name
+          }
+        });
       } catch (error) {
         console.log(`${approach.name} failed:`, error.message);
         lastError = error;
+        allErrors.push({ method: approach.name, error: error.message });
       }
     }
     
     // If we get here, all approaches failed
-    return res.json({ 
+    return res.status(200).json({ 
       error: 'OAuth authentication failed', 
       details: 'All authentication approaches failed',
       lastError: lastError?.message,
+      allErrors,
       debugInfo: {
-        codeVerifierLength: codeVerifier ? codeVerifier.length : null,
+        codeVerifierOriginal: originalVerifier,
+        codeVerifierLength: originalVerifier ? originalVerifier.length : null,
+        codeVerifierFixed: codeVerifier,
         codeVerifierValid: codeVerifier ? /^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier) : false,
         receivedCode: code ? code.substring(0, 10) + '...' : null
       },
       recommendedActions: [
+        'Run n8n callback with "Require Proof Key for Code Exchange (PKCE)" DISABLED in Salesforce Connected App',
         'Verify client ID and secret are correct',
-        'Check if Salesforce requires specific PKCE method',
         'Try setting up a completely new Connected App',
-        'Use a test client (like Postman) to verify if the issue is with n8n or Salesforce'
+        'Use the Connected App settings exactly as shown in the n8n documentation'
       ]
     });
     
@@ -145,7 +195,6 @@ export default async function handler(req, res) {
  * @param {string} config.code - The authorization code
  * @param {string|null} [config.codeVerifier] - The PKCE code verifier if available
  * @param {boolean} [config.pkce] - Whether to use PKCE
- * @param {string} [config.method] - The PKCE method (S256 or plain)
  */
 async function exchangeCodeForToken(config) {
   return new Promise((resolve, reject) => {
@@ -161,16 +210,10 @@ async function exchangeCodeForToken(config) {
     // Add code_verifier if PKCE is enabled
     if (config.pkce && config.codeVerifier) {
       data.append('code_verifier', config.codeVerifier);
-      
-      // If using plain method, append it
-      if (config.method === 'plain') {
-        data.append('code_challenge_method', 'plain');
-      }
-      
-      console.log(`Including code_verifier in token request${config.method ? ' with method ' + config.method : ''}`);
+      console.log('Including code_verifier in token request');
     }
     
-    const pkceStatus = config.pkce ? (config.method || 'S256') : 'disabled';
+    const pkceStatus = config.pkce ? 'enabled' : 'disabled';
     console.log(`Exchanging code for token (PKCE: ${pkceStatus})...`);
     console.log('Request data:', data.toString());
     

@@ -89,27 +89,41 @@ async function exchangeCodeForToken(code, service, state) {
   return new Promise((resolve, reject) => {
     const serviceConfig = config[service];
     
+    // Parse the state to get PKCE parameters
+    let stateData;
+    try {
+      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+      console.log('State data contains:', Object.keys(stateData));
+    } catch (e) {
+      console.log('Error parsing state:', e);
+    }
+
     // Basic OAuth parameters
-    const data = new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: serviceConfig.clientId,
-      client_secret: serviceConfig.clientSecret,
-      code: code,
-      redirect_uri: serviceConfig.redirectUri,
-      format: 'json'  // Explicitly request JSON response
-    });
+    const data = new URLSearchParams();
+    data.append('grant_type', 'authorization_code');
+    data.append('client_id', serviceConfig.clientId);
+    data.append('client_secret', serviceConfig.clientSecret);
+    data.append('code', code);
+    data.append('redirect_uri', serviceConfig.redirectUri);
+
+    // Add code challenge method and verifier for PKCE
+    if (service === 'salesforce') {
+      data.append('code_challenge_method', 'S256');
+      // If no code_verifier in state, generate one
+      const code_verifier = stateData?.code_verifier || generateCodeVerifier();
+      data.append('code_verifier', code_verifier);
+    }
 
     const url = new URL(serviceConfig.tokenUrl);
     
-    // Add detailed logging
-    console.log('Full token exchange details:', {
+    // Add detailed logging (with sensitive data masked)
+    console.log('Token exchange request:', {
       url: url.toString(),
       redirect_uri: serviceConfig.redirectUri,
-      client_id: serviceConfig.clientId,
-      client_secret: '(hidden)',
-      code: code,
+      client_id: maskString(serviceConfig.clientId),
+      code: maskString(code),
       grant_type: 'authorization_code',
-      full_payload: data.toString()
+      has_code_verifier: data.has('code_verifier')
     });
 
     const options = {
@@ -123,17 +137,8 @@ async function exchangeCodeForToken(code, service, state) {
       }
     };
 
-    console.log('Request options:', {
-      ...options,
-      headers: {
-        ...options.headers,
-        'Content-Length': options.headers['Content-Length']
-      }
-    });
-
     const req = https.request(options, (res) => {
-      console.log('Token exchange response headers:', res.headers);
-      console.log('Token exchange response status:', res.statusCode);
+      console.log('Response status:', res.statusCode);
       let responseData = '';
 
       res.on('data', (chunk) => {
@@ -142,31 +147,22 @@ async function exchangeCodeForToken(code, service, state) {
 
       res.on('end', () => {
         try {
-          console.log('Raw response data:', responseData);
           const parsedData = JSON.parse(responseData);
-          console.log('Parsed response:', {
-            ...parsedData,
-            access_token: parsedData.access_token ? '(set)' : '(not set)',
-            refresh_token: parsedData.refresh_token ? '(set)' : '(not set)'
+          // Log response without sensitive data
+          console.log('Response:', {
+            status: res.statusCode,
+            error: parsedData.error,
+            error_description: parsedData.error_description,
+            has_access_token: !!parsedData.access_token,
+            has_refresh_token: !!parsedData.refresh_token,
+            token_type: parsedData.token_type,
+            scope: parsedData.scope
           });
           
-          if (service === 'slack' && !parsedData.ok) {
-            reject(new Error(parsedData.error || 'Failed to exchange code for token'));
-          } else if (service === 'salesforce' && parsedData.error) {
+          if (service === 'salesforce' && parsedData.error) {
             reject(new Error(parsedData.error_description || parsedData.error));
           } else {
-            // Transform response to match n8n expectations if needed
-            if (service === 'salesforce') {
-              resolve({
-                access_token: parsedData.access_token,
-                refresh_token: parsedData.refresh_token,
-                token_type: parsedData.token_type,
-                instance_url: parsedData.instance_url,
-                scope: parsedData.scope
-              });
-            } else {
-              resolve(parsedData);
-            }
+            resolve(parsedData);
           }
         } catch (error) {
           console.error('Error parsing response:', error);
@@ -183,4 +179,20 @@ async function exchangeCodeForToken(code, service, state) {
     req.write(data.toString());
     req.end();
   });
+}
+
+// Utility functions
+function maskString(str) {
+  if (!str) return '(not set)';
+  if (str.length <= 8) return '***';
+  return str.substr(0, 4) + '...' + str.substr(-4);
+}
+
+function generateCodeVerifier() {
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  let text = '';
+  for (let i = 0; i < 128; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
 } 

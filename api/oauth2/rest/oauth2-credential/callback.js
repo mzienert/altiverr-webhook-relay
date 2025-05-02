@@ -42,14 +42,29 @@ export default async function handler(req, res) {
     // Detect service based on query parameters if not explicitly provided
     let service = explicitService;
     if (!service) {
-      // Salesforce typically includes instance_url or state parameters
-      if (req.query.state?.includes('salesforce') || req.query.instance_url) {
-        service = 'salesforce';
-      } else {
-        // Default to slack if we can't determine the service
-        service = 'slack';
+      try {
+        // Try to parse the state parameter
+        const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
+        console.log('Parsed state data:', stateData);
+        
+        // Check if this is an n8n state token
+        if (stateData.cid === 'N7GoXIhuLOvxf9SO') {
+          service = 'salesforce';
+        }
+      } catch (e) {
+        console.log('Error parsing state:', e);
+      }
+      
+      // Fallback detection
+      if (!service) {
+        if (req.query.state?.includes('salesforce') || req.query.instance_url) {
+          service = 'salesforce';
+        } else {
+          service = 'slack';
+        }
       }
     }
+    
     console.log('Detected service:', service);
 
     if (!['slack', 'salesforce'].includes(service)) {

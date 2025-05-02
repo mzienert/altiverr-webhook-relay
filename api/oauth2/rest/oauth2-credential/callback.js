@@ -2,9 +2,18 @@ const https = require('https');
 
 // OAuth2 configuration
 const config = {
-  clientId: process.env.SLACK_CLIENT_ID,
-  clientSecret: process.env.SLACK_CLIENT_SECRET,
-  redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback'
+  slack: {
+    clientId: process.env.SLACK_CLIENT_ID,
+    clientSecret: process.env.SLACK_CLIENT_SECRET,
+    tokenUrl: 'https://slack.com/api/oauth.v2.access',
+    redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback'
+  },
+  salesforce: {
+    clientId: process.env.SALESFORCE_CLIENT_ID,
+    clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
+    tokenUrl: 'https://login.salesforce.com/services/oauth2/token',
+    redirectUri: process.env.OAUTH_REDIRECT_URI || 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback'
+  }
 };
 
 export default async function handler(req, res) {
@@ -13,23 +22,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { code } = req.query;
+    const { code, service = 'slack' } = req.query;
 
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
+    if (!['slack', 'salesforce'].includes(service)) {
+      return res.status(400).json({ error: 'Invalid service specified' });
+    }
+
     // Exchange the authorization code for an access token
-    const tokenResponse = await exchangeCodeForToken(code);
+    const tokenResponse = await exchangeCodeForToken(code, service);
 
     // Return the token response in the format n8n expects
-    return res.json({
-      access_token: tokenResponse.access_token,
-      token_type: tokenResponse.token_type,
-      scope: tokenResponse.scope,
-      team: tokenResponse.team,
-      authed_user: tokenResponse.authed_user
-    });
+    return res.json(tokenResponse);
   } catch (error) {
     console.error('OAuth error:', error);
     return res.status(500).json({ 
@@ -39,18 +46,23 @@ export default async function handler(req, res) {
   }
 }
 
-async function exchangeCodeForToken(code) {
+async function exchangeCodeForToken(code, service) {
   return new Promise((resolve, reject) => {
+    const serviceConfig = config[service];
+    
     const data = new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
+      client_id: serviceConfig.clientId,
+      client_secret: serviceConfig.clientSecret,
       code: code,
-      redirect_uri: config.redirectUri
+      redirect_uri: serviceConfig.redirectUri,
+      ...(service === 'salesforce' && { grant_type: 'authorization_code' })
     });
 
+    const url = new URL(serviceConfig.tokenUrl);
+    
     const options = {
-      hostname: 'slack.com',
-      path: '/api/oauth.v2.access',
+      hostname: url.hostname,
+      path: url.pathname + url.search,
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -68,10 +80,24 @@ async function exchangeCodeForToken(code) {
       res.on('end', () => {
         try {
           const parsedData = JSON.parse(responseData);
-          if (!parsedData.ok) {
+          
+          if (service === 'slack' && !parsedData.ok) {
             reject(new Error(parsedData.error || 'Failed to exchange code for token'));
+          } else if (service === 'salesforce' && parsedData.error) {
+            reject(new Error(parsedData.error_description || parsedData.error));
           } else {
-            resolve(parsedData);
+            // Transform response to match n8n expectations if needed
+            if (service === 'salesforce') {
+              resolve({
+                access_token: parsedData.access_token,
+                refresh_token: parsedData.refresh_token,
+                token_type: parsedData.token_type,
+                instance_url: parsedData.instance_url,
+                scope: parsedData.scope
+              });
+            } else {
+              resolve(parsedData);
+            }
           }
         } catch (error) {
           reject(error);

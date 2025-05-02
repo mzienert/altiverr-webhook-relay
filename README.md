@@ -89,3 +89,38 @@ To view messages in the queue:
 The `peek-queue.sh` script is useful for monitoring the queue without affecting message processing, as it sets a visibility timeout of 0 seconds.
 
 The `queue-stats.sh` script provides detailed information about the queue status directly from AWS, showing metrics like approximate message count, delay seconds, and other queue attributes.
+
+## OAuth Integration
+
+This project includes an OAuth callback endpoint used by n8n for service integrations (like Slack). The endpoint is structured to support n8n's standardized OAuth flow:
+
+```
+/api/oauth2/rest/oauth2-credential/callback
+```
+
+### How it Works
+
+1. When setting up an integration in n8n:
+   - User initiates OAuth connection
+   - Service (e.g., Slack) redirects to our callback with a temporary code
+   - Our endpoint exchanges this code for permanent access tokens
+   - n8n stores these tokens for future operations
+
+2. The endpoint is only used during:
+   - Initial authorization
+   - Reauthorization if tokens expire or are revoked
+   - Setting up new OAuth-based integrations
+
+### Slack Integration Notes
+
+Slack's OAuth implementation requires a specific flow:
+
+1. First OAuth exchange:
+   - Returns both bot token (`xoxb-`) and user token (`xoxp-`)
+   - Each token type has different permissions
+
+2. n8n credential setup:
+   - Use the User OAuth Token (`xoxp-`) for actions requiring user permissions
+   - Required for operations like channel management and message posting
+
+The endpoint is designed to handle future n8n OAuth integrations (GitHub, Google, etc.) using the same callback path.

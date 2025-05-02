@@ -7,11 +7,20 @@ const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
 
 /**
  * Base64URL encoding function as per RFC 7636
- * @param {Buffer} buffer - The buffer to encode
+ * @param {Buffer|string} buffer - The buffer or string to encode
  * @returns {string} The base64url encoded string
  */
 function base64URLEncode(buffer) {
-  return buffer.toString('base64')
+  // Ensure buffer is converted to base64 properly
+  let base64;
+  if (typeof buffer === 'string') {
+    base64 = Buffer.from(buffer).toString('base64');
+  } else {
+    base64 = buffer.toString('base64');
+  }
+  
+  // Convert to base64url encoding
+  return base64
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=/g, '');
@@ -23,9 +32,24 @@ function base64URLEncode(buffer) {
  * @returns {string} The code challenge
  */
 function generateCodeChallenge(verifier) {
-  return base64URLEncode(
+  // Log verifier encoding checks
+  console.log('Code verifier type:', typeof verifier);
+  console.log('Code verifier length:', verifier.length);
+  console.log('Code verifier regex match:', /^[A-Za-z0-9\-._~]{43,128}$/.test(verifier));
+  
+  // Try both methods to see which works
+  const directHash = base64URLEncode(
     crypto.createHash('sha256').update(verifier).digest()
   );
+  
+  const bufferHash = base64URLEncode(
+    crypto.createHash('sha256').update(Buffer.from(verifier)).digest()
+  );
+  
+  console.log('Code challenge (direct):', directHash);
+  console.log('Code challenge (buffer):', bufferHash);
+  
+  return directHash;
 }
 
 export default async function handler(req, res) {
@@ -56,7 +80,7 @@ export default async function handler(req, res) {
           codeVerifier = stateData.token;
           console.log('Found code_verifier in state data (token field):', codeVerifier);
           
-          // Generate a proper code challenge for debugging
+          // Generate proper code challenges for debugging
           const codeChallenge = generateCodeChallenge(codeVerifier);
           console.log('Generated S256 code challenge:', codeChallenge);
         }
@@ -65,38 +89,44 @@ export default async function handler(req, res) {
       }
     }
 
-    let tokenData;
-    
-    // Try using standard OAuth first (no PKCE) - this might work if PKCE is actually disabled
+    // Try standard OAuth flow with code parameter only
     try {
-      console.log('Attempting standard OAuth flow without PKCE first...');
-      tokenData = await exchangeCodeForToken(code);
+      console.log('Attempting standard OAuth flow without PKCE...');
+      const tokenData = await exchangeCodeForToken(code);
       console.log('Standard OAuth flow succeeded');
       return res.json(tokenData);
-    } catch (error) {
-      console.log('Standard OAuth flow failed:', error.message);
+    } catch (standardError) {
+      console.log('Standard OAuth flow failed:', standardError.message);
       
-      // If standard flow fails and we have a code_verifier, try with PKCE
+      // If we have a code_verifier, try with it
       if (codeVerifier) {
         try {
           console.log('Attempting PKCE flow with code_verifier...');
-          tokenData = await exchangeCodeForToken(code, codeVerifier);
+          const tokenData = await exchangeCodeForToken(code, codeVerifier);
           console.log('PKCE flow succeeded');
           return res.json(tokenData);
         } catch (pkceError) {
           console.error('PKCE flow failed:', pkceError.message);
-          return res.status(500).json({ 
+          
+          // Return detailed error for troubleshooting
+          return res.json({ 
             error: 'OAuth authentication failed', 
-            details: 'Both standard and PKCE authentication flows failed. Please ensure your Salesforce Connected App is configured correctly.',
-            standardError: error.message,
-            pkceError: pkceError.message 
+            details: 'Both authentication flows failed. Please check Salesforce Connected App settings.',
+            standardError: standardError.message,
+            pkceError: pkceError.message,
+            recommendedActions: [
+              'Enable or disable PKCE consistently in the Salesforce Connected App',
+              'Verify the exact callback URL matches',
+              'Check that n8n is properly configured for PKCE',
+              'Try setting code_challenge_method=S256 in the initial authorization request',
+              'Ensure client ID and secret are correct'
+            ]
           });
         }
       } else {
-        // If no code_verifier is available, return the original error
         return res.status(500).json({ 
           error: 'OAuth authentication failed', 
-          details: error.message 
+          details: standardError.message 
         });
       }
     }
@@ -132,6 +162,7 @@ async function exchangeCodeForToken(code, codeVerifier = null) {
     }
     
     console.log(`Exchanging code for token${codeVerifier ? ' with PKCE' : ' without PKCE'}...`);
+    console.log('Request data:', data.toString());
     
     // Parse token URL
     const url = new URL(TOKEN_URL);

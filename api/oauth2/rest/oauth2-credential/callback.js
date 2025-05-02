@@ -1,4 +1,5 @@
 const https = require('https');
+const crypto = require('crypto');
 
 const BASE_URL = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
 
@@ -8,14 +9,6 @@ function getRedirectUri(service) {
 
 // OAuth2 configuration
 const config = {
-  slack: {
-    clientId: process.env.SLACK_CLIENT_ID,
-    clientSecret: process.env.SLACK_CLIENT_SECRET,
-    tokenUrl: 'https://slack.com/api/oauth.v2.access',
-    get redirectUri() {
-      return getRedirectUri('slack');
-    }
-  },
   salesforce: {
     clientId: process.env.SALESFORCE_CLIENT_ID,
     clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
@@ -26,6 +19,18 @@ const config = {
   }
 };
 
+// PKCE Utilities
+function base64URLEncode(str) {
+  return str.toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest();
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -33,46 +38,23 @@ export default async function handler(req, res) {
 
   try {
     console.log('Received OAuth callback with query params:', req.query);
-    const { code, service: explicitService, state } = req.query;
+    const { code, state } = req.query;
 
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Detect service based on query parameters if not explicitly provided
-    let service = explicitService;
-    if (!service) {
-      try {
-        // Try to parse the state parameter
-        const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-        console.log('Parsed state data:', stateData);
-        
-        // Check if this is an n8n state token
-        if (stateData.cid === 'N7GoXIhuLOvxf9SO') {
-          service = 'salesforce';
-        }
-      } catch (e) {
-        console.log('Error parsing state:', e);
-      }
-      
-      // Fallback detection
-      if (!service) {
-        if (state?.includes('salesforce') || req.query.instance_url) {
-          service = 'salesforce';
-        } else {
-          service = 'slack';
-        }
-      }
-    }
-    
-    console.log('Detected service:', service);
-
-    if (!['slack', 'salesforce'].includes(service)) {
-      return res.status(400).json({ error: 'Invalid service specified' });
+    // Parse state parameter to get code verifier
+    let stateData;
+    try {
+      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+      console.log('State data contains:', Object.keys(stateData));
+    } catch (e) {
+      console.log('Error parsing state:', e);
     }
 
     // Exchange the authorization code for an access token
-    const tokenResponse = await exchangeCodeForToken(code, service, state);
+    const tokenResponse = await exchangeCodeForToken(code, stateData);
 
     // Return the token response in the format n8n expects
     return res.json(tokenResponse);
@@ -85,34 +67,25 @@ export default async function handler(req, res) {
   }
 }
 
-async function exchangeCodeForToken(code, service, state) {
+async function exchangeCodeForToken(code, stateData) {
   return new Promise((resolve, reject) => {
-    const serviceConfig = config[service];
+    const serviceConfig = config.salesforce;
     
-    // Parse the state to get PKCE parameters
-    let stateData;
-    try {
-      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-      console.log('State data contains:', Object.keys(stateData));
-    } catch (e) {
-      console.log('Error parsing state:', e);
-    }
-
-    // Basic OAuth parameters
-    const data = new URLSearchParams();
-    data.append('grant_type', 'authorization_code');
-    data.append('client_id', serviceConfig.clientId);
-    data.append('client_secret', serviceConfig.clientSecret);
-    data.append('code', code);
-    data.append('redirect_uri', serviceConfig.redirectUri);
-
-    // Add code challenge method and verifier for PKCE
-    if (service === 'salesforce') {
-      data.append('code_challenge_method', 'S256');
-      // If no code_verifier in state, generate one
-      const code_verifier = stateData?.code_verifier || generateCodeVerifier();
-      data.append('code_verifier', code_verifier);
-    }
+    // Generate code verifier if not provided
+    const code_verifier = crypto.randomBytes(32).toString('hex');
+    
+    // Calculate code challenge
+    const code_challenge = base64URLEncode(sha256(Buffer.from(code_verifier)));
+    
+    const data = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: serviceConfig.clientId,
+      client_secret: serviceConfig.clientSecret,
+      code: code,
+      redirect_uri: serviceConfig.redirectUri,
+      code_verifier: code_verifier,
+      code_challenge_method: 'S256'
+    });
 
     const url = new URL(serviceConfig.tokenUrl);
     
@@ -122,8 +95,9 @@ async function exchangeCodeForToken(code, service, state) {
       redirect_uri: serviceConfig.redirectUri,
       client_id: maskString(serviceConfig.clientId),
       code: maskString(code),
-      grant_type: 'authorization_code',
-      has_code_verifier: data.has('code_verifier')
+      code_verifier: maskString(code_verifier),
+      code_challenge: code_challenge,
+      grant_type: 'authorization_code'
     });
 
     const options = {
@@ -148,6 +122,7 @@ async function exchangeCodeForToken(code, service, state) {
       res.on('end', () => {
         try {
           const parsedData = JSON.parse(responseData);
+          
           // Log response without sensitive data
           console.log('Response:', {
             status: res.statusCode,
@@ -156,13 +131,20 @@ async function exchangeCodeForToken(code, service, state) {
             has_access_token: !!parsedData.access_token,
             has_refresh_token: !!parsedData.refresh_token,
             token_type: parsedData.token_type,
-            scope: parsedData.scope
+            scope: parsedData.scope,
+            instance_url: parsedData.instance_url
           });
           
-          if (service === 'salesforce' && parsedData.error) {
+          if (parsedData.error) {
             reject(new Error(parsedData.error_description || parsedData.error));
           } else {
-            resolve(parsedData);
+            resolve({
+              access_token: parsedData.access_token,
+              refresh_token: parsedData.refresh_token,
+              token_type: parsedData.token_type,
+              instance_url: parsedData.instance_url,
+              scope: parsedData.scope
+            });
           }
         } catch (error) {
           console.error('Error parsing response:', error);
@@ -181,18 +163,8 @@ async function exchangeCodeForToken(code, service, state) {
   });
 }
 
-// Utility functions
 function maskString(str) {
   if (!str) return '(not set)';
   if (str.length <= 8) return '***';
   return str.substr(0, 4) + '...' + str.substr(-4);
-}
-
-function generateCodeVerifier() {
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
-  let text = '';
-  for (let i = 0; i < 128; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
 } 

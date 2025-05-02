@@ -18,11 +18,44 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Standard OAuth flow without PKCE
-    const tokenData = await exchangeCodeForToken(code);
+    // Parse state for code_verifier (n8n might be sending it here)
+    let stateData = {};
+    let codeVerifier = null;
     
-    // Return token to client
-    return res.json(tokenData);
+    if (state) {
+      try {
+        stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+        console.log('State data contains:', Object.keys(stateData));
+        
+        // n8n typically stores the code_verifier as "token" in the state
+        if (stateData.token) {
+          codeVerifier = stateData.token;
+          console.log('Found code_verifier in state data (token field):', codeVerifier);
+        }
+      } catch (e) {
+        console.log('Error parsing state:', e);
+      }
+    }
+
+    // Use PKCE if we have a code_verifier, as Salesforce seems to require it
+    if (codeVerifier) {
+      try {
+        console.log('Using code_verifier from state:', codeVerifier);
+        const tokenData = await exchangeCodeForToken(code, codeVerifier);
+        return res.json(tokenData);
+      } catch (error) {
+        console.error('Token exchange failed:', error.message);
+        return res.status(500).json({ 
+          error: 'OAuth authentication failed', 
+          details: error.message 
+        });
+      }
+    } else {
+      // Try without code_verifier (though this will likely fail based on errors)
+      console.log('No code_verifier found in state, attempting standard flow');
+      const tokenData = await exchangeCodeForToken(code);
+      return res.json(tokenData);
+    }
   } catch (error) {
     console.error('OAuth error:', error);
     return res.status(500).json({ 
@@ -35,8 +68,9 @@ export default async function handler(req, res) {
 /**
  * Exchange authorization code for an access token
  * @param {string} code - The authorization code
+ * @param {string|null} codeVerifier - The PKCE code verifier if available
  */
-async function exchangeCodeForToken(code) {
+async function exchangeCodeForToken(code, codeVerifier = null) {
   return new Promise((resolve, reject) => {
     // Create form data
     const data = new URLSearchParams({
@@ -46,6 +80,12 @@ async function exchangeCodeForToken(code) {
       client_secret: process.env.SALESFORCE_CLIENT_SECRET,
       redirect_uri: REDIRECT_URI
     });
+    
+    // Add code_verifier if provided
+    if (codeVerifier) {
+      data.append('code_verifier', codeVerifier);
+      console.log('Including code_verifier in token request');
+    }
     
     console.log('Exchanging code for token...');
     

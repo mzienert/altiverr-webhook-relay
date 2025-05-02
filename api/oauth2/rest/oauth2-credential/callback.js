@@ -89,28 +89,15 @@ async function exchangeCodeForToken(code, service, state) {
   return new Promise((resolve, reject) => {
     const serviceConfig = config[service];
     
-    // Try to extract code_verifier from state if present
-    let code_verifier;
-    try {
-      const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-      console.log('Parsed state data:', stateData);
-      code_verifier = stateData.codeVerifier;
-    } catch (e) {
-      console.log('Error parsing state for code_verifier:', e);
-    }
-    
+    // Basic OAuth parameters
     const data = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: serviceConfig.clientId,
       client_secret: serviceConfig.clientSecret,
       code: code,
-      redirect_uri: serviceConfig.redirectUri
+      redirect_uri: serviceConfig.redirectUri,
+      format: 'json'  // Explicitly request JSON response
     });
-
-    // Add PKCE parameters if available
-    if (code_verifier) {
-      data.append('code_verifier', code_verifier);
-    }
 
     const url = new URL(serviceConfig.tokenUrl);
     
@@ -121,7 +108,6 @@ async function exchangeCodeForToken(code, service, state) {
       client_id: serviceConfig.clientId,
       client_secret: '(hidden)',
       code: code,
-      code_verifier: code_verifier || '(not provided)',
       grant_type: 'authorization_code',
       full_payload: data.toString()
     });
@@ -132,11 +118,21 @@ async function exchangeCodeForToken(code, service, state) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
         'Content-Length': data.toString().length
       }
     };
 
+    console.log('Request options:', {
+      ...options,
+      headers: {
+        ...options.headers,
+        'Content-Length': options.headers['Content-Length']
+      }
+    });
+
     const req = https.request(options, (res) => {
+      console.log('Token exchange response headers:', res.headers);
       console.log('Token exchange response status:', res.statusCode);
       let responseData = '';
 

@@ -32,6 +32,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    console.log('Received OAuth callback with query params:', req.query);
     const { code, service: explicitService } = req.query;
 
     if (!code) {
@@ -49,6 +50,7 @@ export default async function handler(req, res) {
         service = 'slack';
       }
     }
+    console.log('Detected service:', service);
 
     if (!['slack', 'salesforce'].includes(service)) {
       return res.status(400).json({ error: 'Invalid service specified' });
@@ -73,15 +75,23 @@ async function exchangeCodeForToken(code, service) {
     const serviceConfig = config[service];
     
     const data = new URLSearchParams({
+      grant_type: 'authorization_code',
       client_id: serviceConfig.clientId,
       client_secret: serviceConfig.clientSecret,
       code: code,
-      redirect_uri: serviceConfig.redirectUri,
-      ...(service === 'salesforce' && { grant_type: 'authorization_code' })
+      redirect_uri: serviceConfig.redirectUri
     });
 
     const url = new URL(serviceConfig.tokenUrl);
     
+    console.log('Token exchange request:', {
+      url: url.toString(),
+      redirect_uri: serviceConfig.redirectUri,
+      client_id: serviceConfig.clientId ? '(set)' : '(not set)',
+      client_secret: serviceConfig.clientSecret ? '(set)' : '(not set)',
+      code: code ? '(set)' : '(not set)'
+    });
+
     const options = {
       hostname: url.hostname,
       path: url.pathname + url.search,
@@ -93,6 +103,7 @@ async function exchangeCodeForToken(code, service) {
     };
 
     const req = https.request(options, (res) => {
+      console.log('Token exchange response status:', res.statusCode);
       let responseData = '';
 
       res.on('data', (chunk) => {
@@ -101,7 +112,13 @@ async function exchangeCodeForToken(code, service) {
 
       res.on('end', () => {
         try {
+          console.log('Raw response data:', responseData);
           const parsedData = JSON.parse(responseData);
+          console.log('Parsed response:', {
+            ...parsedData,
+            access_token: parsedData.access_token ? '(set)' : '(not set)',
+            refresh_token: parsedData.refresh_token ? '(set)' : '(not set)'
+          });
           
           if (service === 'slack' && !parsedData.ok) {
             reject(new Error(parsedData.error || 'Failed to exchange code for token'));
@@ -122,12 +139,17 @@ async function exchangeCodeForToken(code, service) {
             }
           }
         } catch (error) {
+          console.error('Error parsing response:', error);
           reject(error);
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (error) => {
+      console.error('Request error:', error);
+      reject(error);
+    });
+
     req.write(data.toString());
     req.end();
   });

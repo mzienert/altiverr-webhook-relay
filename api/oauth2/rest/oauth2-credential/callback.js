@@ -1,148 +1,104 @@
 const https = require('https');
 
-const BASE_URL = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
-
-function getRedirectUri(service) {
-  return process.env.OAUTH_REDIRECT_URI || BASE_URL;
-}
-
-// OAuth2 configuration
-const config = {
-  salesforce: {
-    clientId: process.env.SALESFORCE_CLIENT_ID,
-    clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
-    tokenUrl: 'https://login.salesforce.com/services/oauth2/token',
-    get redirectUri() {
-      return getRedirectUri('salesforce');
-    }
-  }
-};
+// Configuration
+const REDIRECT_URI = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
+const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
 
 export default async function handler(req, res) {
+  // Only accept GET requests
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    console.log('Received OAuth callback with query params:', req.query);
-    const { code, state } = req.query;
-
+    console.log('Received callback:', req.query);
+    
+    const { code } = req.query;
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Parse state parameter
-    let stateData;
-    try {
-      stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-      console.log('State data contains:', Object.keys(stateData));
-    } catch (e) {
-      console.log('Error parsing state:', e);
-    }
-
-    // Exchange the authorization code for an access token
-    const tokenResponse = await exchangeCodeForToken(code);
-
-    // Return the token response in the format n8n expects
-    return res.json(tokenResponse);
+    // Exchange code for token
+    const tokenData = await exchangeCodeForToken(code);
+    
+    // Return token to client (n8n)
+    return res.json(tokenData);
   } catch (error) {
     console.error('OAuth error:', error);
     return res.status(500).json({ 
-      error: 'OAuth authentication failed',
+      error: 'OAuth authentication failed', 
       details: error.message 
     });
   }
 }
 
+/**
+ * Simple function to exchange authorization code for access token
+ */
 async function exchangeCodeForToken(code) {
   return new Promise((resolve, reject) => {
-    const serviceConfig = config.salesforce;
-    
-    // Basic OAuth parameters without PKCE
+    // Create form data
     const data = new URLSearchParams({
       grant_type: 'authorization_code',
-      client_id: serviceConfig.clientId,
-      client_secret: serviceConfig.clientSecret,
       code: code,
-      redirect_uri: serviceConfig.redirectUri
+      client_id: process.env.SALESFORCE_CLIENT_ID,
+      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
+      redirect_uri: REDIRECT_URI
     });
-
-    const url = new URL(serviceConfig.tokenUrl);
     
-    // Add detailed logging (with sensitive data masked)
-    console.log('Token exchange request:', {
-      url: url.toString(),
-      redirect_uri: serviceConfig.redirectUri,
-      client_id: maskString(serviceConfig.clientId),
-      code: maskString(code),
-      grant_type: 'authorization_code'
-    });
-
+    console.log('Exchanging code for token...');
+    
+    // Parse token URL
+    const url = new URL(TOKEN_URL);
+    
+    // Request options
     const options = {
       hostname: url.hostname,
-      path: url.pathname + url.search,
+      path: url.pathname,
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'Content-Length': data.toString().length
+        'Content-Length': Buffer.byteLength(data.toString())
       }
     };
-
-    const httpReq = https.request(options, (res) => {
-      console.log('Response status:', res.statusCode);
-      let responseData = '';
-
+    
+    // Make request
+    const req = https.request(options, (res) => {
+      let data = '';
+      
       res.on('data', (chunk) => {
-        responseData += chunk;
+        data += chunk;
       });
-
+      
       res.on('end', () => {
-        try {
-          const parsedData = JSON.parse(responseData);
-          
-          // Log response without sensitive data
-          console.log('Response:', {
-            status: res.statusCode,
-            error: parsedData.error,
-            error_description: parsedData.error_description,
-            has_access_token: !!parsedData.access_token,
-            has_refresh_token: !!parsedData.refresh_token,
-            token_type: parsedData.token_type,
-            scope: parsedData.scope,
-            instance_url: parsedData.instance_url
-          });
-          
-          if (parsedData.error) {
-            reject(new Error(parsedData.error_description || parsedData.error));
-          } else {
-            resolve({
-              access_token: parsedData.access_token,
-              refresh_token: parsedData.refresh_token,
-              token_type: parsedData.token_type,
-              instance_url: parsedData.instance_url,
-              scope: parsedData.scope
-            });
+        if (res.statusCode !== 200) {
+          console.error('Token response error:', res.statusCode, data);
+          try {
+            const errorData = JSON.parse(data);
+            reject(new Error(errorData.error_description || errorData.error || 'Token request failed'));
+          } catch (e) {
+            reject(new Error(`Token request failed with status: ${res.statusCode}`));
           }
+          return;
+        }
+        
+        try {
+          const tokenData = JSON.parse(data);
+          console.log('Token received successfully');
+          resolve(tokenData);
         } catch (error) {
-          console.error('Error parsing response:', error);
-          reject(error);
+          console.error('Error parsing token response', error);
+          reject(new Error('Failed to parse token response'));
         }
       });
     });
-
-    httpReq.on('error', (error) => {
+    
+    req.on('error', (error) => {
       console.error('Request error:', error);
       reject(error);
     });
-
-    httpReq.write(data.toString());
-    httpReq.end();
+    
+    req.write(data.toString());
+    req.end();
   });
-}
-
-function maskString(str) {
-  if (!str) return '(not set)';
-  if (str.length <= 8) return '***';
-  return str.substr(0, 4) + '...' + str.substr(-4);
 } 

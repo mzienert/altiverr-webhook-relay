@@ -1,8 +1,32 @@
 const https = require('https');
+const crypto = require('crypto');
 
 // Configuration
 const REDIRECT_URI = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
 const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
+
+/**
+ * Base64URL encoding function as per RFC 7636
+ * @param {Buffer} buffer - The buffer to encode
+ * @returns {string} The base64url encoded string
+ */
+function base64URLEncode(buffer) {
+  return buffer.toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
+/**
+ * Creates a code challenge using SHA256 as per RFC 7636
+ * @param {string} verifier - The code verifier
+ * @returns {string} The code challenge
+ */
+function generateCodeChallenge(verifier) {
+  return base64URLEncode(
+    crypto.createHash('sha256').update(verifier).digest()
+  );
+}
 
 export default async function handler(req, res) {
   // Only accept GET requests
@@ -31,6 +55,10 @@ export default async function handler(req, res) {
         if (stateData.token) {
           codeVerifier = stateData.token;
           console.log('Found code_verifier in state data (token field):', codeVerifier);
+          
+          // Generate a proper code challenge for debugging
+          const codeChallenge = generateCodeChallenge(codeVerifier);
+          console.log('Generated S256 code challenge:', codeChallenge);
         }
       } catch (e) {
         console.log('Error parsing state:', e);

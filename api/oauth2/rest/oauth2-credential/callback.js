@@ -89,7 +89,7 @@ async function exchangeCodeForToken(code) {
       }
     };
 
-    const req = https.request(options, (res) => {
+    const httpReq = https.request(options, (res) => {
       console.log('Response status:', res.statusCode);
       let responseData = '';
 
@@ -131,13 +131,13 @@ async function exchangeCodeForToken(code) {
       });
     });
 
-    req.on('error', (error) => {
+    httpReq.on('error', (error) => {
       console.error('Request error:', error);
       reject(error);
     });
 
-    req.write(data.toString());
-    req.end();
+    httpReq.write(data.toString());
+    httpReq.end();
   });
 }
 

@@ -84,12 +84,14 @@ async function exchangeCodeForToken(code, service) {
 
     const url = new URL(serviceConfig.tokenUrl);
     
-    console.log('Token exchange request:', {
+    console.log('Full token exchange details:', {
       url: url.toString(),
       redirect_uri: serviceConfig.redirectUri,
-      client_id: serviceConfig.clientId ? '(set)' : '(not set)',
-      client_secret: serviceConfig.clientSecret ? '(set)' : '(not set)',
-      code: code ? '(set)' : '(not set)'
+      client_id: serviceConfig.clientId,
+      client_secret: '(hidden)',
+      code: code,
+      grant_type: 'authorization_code',
+      full_payload: data.toString()
     });
 
     const options = {

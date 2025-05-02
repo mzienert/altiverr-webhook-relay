@@ -33,7 +33,7 @@ export default async function handler(req, res) {
 
   try {
     console.log('Received OAuth callback with query params:', req.query);
-    const { code, service: explicitService } = req.query;
+    const { code, service: explicitService, state } = req.query;
 
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
@@ -44,7 +44,7 @@ export default async function handler(req, res) {
     if (!service) {
       try {
         // Try to parse the state parameter
-        const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
+        const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
         console.log('Parsed state data:', stateData);
         
         // Check if this is an n8n state token
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
       
       // Fallback detection
       if (!service) {
-        if (req.query.state?.includes('salesforce') || req.query.instance_url) {
+        if (state?.includes('salesforce') || req.query.instance_url) {
           service = 'salesforce';
         } else {
           service = 'slack';
@@ -72,7 +72,7 @@ export default async function handler(req, res) {
     }
 
     // Exchange the authorization code for an access token
-    const tokenResponse = await exchangeCodeForToken(code, service);
+    const tokenResponse = await exchangeCodeForToken(code, service, state);
 
     // Return the token response in the format n8n expects
     return res.json(tokenResponse);
@@ -85,14 +85,14 @@ export default async function handler(req, res) {
   }
 }
 
-async function exchangeCodeForToken(code, service) {
+async function exchangeCodeForToken(code, service, state) {
   return new Promise((resolve, reject) => {
     const serviceConfig = config[service];
     
     // Try to extract code_verifier from state if present
     let code_verifier;
     try {
-      const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
+      const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
       console.log('Parsed state data:', stateData);
       code_verifier = stateData.codeVerifier;
     } catch (e) {
@@ -108,8 +108,8 @@ async function exchangeCodeForToken(code, service) {
     });
 
     // Add PKCE parameters if available
-    if (code_verifier || req.query?.code_verifier) {
-      data.append('code_verifier', code_verifier || req.query.code_verifier);
+    if (code_verifier) {
+      data.append('code_verifier', code_verifier);
     }
 
     const url = new URL(serviceConfig.tokenUrl);
@@ -121,7 +121,7 @@ async function exchangeCodeForToken(code, service) {
       client_id: serviceConfig.clientId,
       client_secret: '(hidden)',
       code: code,
-      code_verifier: code_verifier || req.query?.code_verifier || '(not provided)',
+      code_verifier: code_verifier || '(not provided)',
       grant_type: 'authorization_code',
       full_payload: data.toString()
     });

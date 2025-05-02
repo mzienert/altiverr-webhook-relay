@@ -65,24 +65,40 @@ export default async function handler(req, res) {
       }
     }
 
-    // Use PKCE if we have a code_verifier, as Salesforce seems to require it
-    if (codeVerifier) {
-      try {
-        console.log('Using code_verifier from state:', codeVerifier);
-        const tokenData = await exchangeCodeForToken(code, codeVerifier);
-        return res.json(tokenData);
-      } catch (error) {
-        console.error('Token exchange failed:', error.message);
+    let tokenData;
+    
+    // Try using standard OAuth first (no PKCE) - this might work if PKCE is actually disabled
+    try {
+      console.log('Attempting standard OAuth flow without PKCE first...');
+      tokenData = await exchangeCodeForToken(code);
+      console.log('Standard OAuth flow succeeded');
+      return res.json(tokenData);
+    } catch (error) {
+      console.log('Standard OAuth flow failed:', error.message);
+      
+      // If standard flow fails and we have a code_verifier, try with PKCE
+      if (codeVerifier) {
+        try {
+          console.log('Attempting PKCE flow with code_verifier...');
+          tokenData = await exchangeCodeForToken(code, codeVerifier);
+          console.log('PKCE flow succeeded');
+          return res.json(tokenData);
+        } catch (pkceError) {
+          console.error('PKCE flow failed:', pkceError.message);
+          return res.status(500).json({ 
+            error: 'OAuth authentication failed', 
+            details: 'Both standard and PKCE authentication flows failed. Please ensure your Salesforce Connected App is configured correctly.',
+            standardError: error.message,
+            pkceError: pkceError.message 
+          });
+        }
+      } else {
+        // If no code_verifier is available, return the original error
         return res.status(500).json({ 
           error: 'OAuth authentication failed', 
           details: error.message 
         });
       }
-    } else {
-      // Try without code_verifier (though this will likely fail based on errors)
-      console.log('No code_verifier found in state, attempting standard flow');
-      const tokenData = await exchangeCodeForToken(code);
-      return res.json(tokenData);
     }
   } catch (error) {
     console.error('OAuth error:', error);
@@ -115,7 +131,7 @@ async function exchangeCodeForToken(code, codeVerifier = null) {
       console.log('Including code_verifier in token request');
     }
     
-    console.log('Exchanging code for token...');
+    console.log(`Exchanging code for token${codeVerifier ? ' with PKCE' : ' without PKCE'}...`);
     
     // Parse token URL
     const url = new URL(TOKEN_URL);

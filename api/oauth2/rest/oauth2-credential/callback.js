@@ -74,6 +74,7 @@ export default async function handler(req, res) {
       try {
         stateData = JSON.parse(Buffer.from(state, 'base64').toString());
         console.log('State data contains:', Object.keys(stateData));
+        console.log('Complete state data:', JSON.stringify(stateData, null, 2));
         
         // n8n typically stores the code_verifier as "token" in the state
         if (stateData.token) {
@@ -89,47 +90,46 @@ export default async function handler(req, res) {
       }
     }
 
-    // Try standard OAuth flow with code parameter only
-    try {
-      console.log('Attempting standard OAuth flow without PKCE...');
-      const tokenData = await exchangeCodeForToken(code);
-      console.log('Standard OAuth flow succeeded');
-      return res.json(tokenData);
-    } catch (standardError) {
-      console.log('Standard OAuth flow failed:', standardError.message);
-      
-      // If we have a code_verifier, try with it
-      if (codeVerifier) {
-        try {
-          console.log('Attempting PKCE flow with code_verifier...');
-          const tokenData = await exchangeCodeForToken(code, codeVerifier);
-          console.log('PKCE flow succeeded');
-          return res.json(tokenData);
-        } catch (pkceError) {
-          console.error('PKCE flow failed:', pkceError.message);
-          
-          // Return detailed error for troubleshooting
-          return res.json({ 
-            error: 'OAuth authentication failed', 
-            details: 'Both authentication flows failed. Please check Salesforce Connected App settings.',
-            standardError: standardError.message,
-            pkceError: pkceError.message,
-            recommendedActions: [
-              'Enable or disable PKCE consistently in the Salesforce Connected App',
-              'Verify the exact callback URL matches',
-              'Check that n8n is properly configured for PKCE',
-              'Try setting code_challenge_method=S256 in the initial authorization request',
-              'Ensure client ID and secret are correct'
-            ]
-          });
-        }
-      } else {
-        return res.status(500).json({ 
-          error: 'OAuth authentication failed', 
-          details: standardError.message 
-        });
+    // Try different approaches in sequence until one works
+    const approaches = [
+      { name: "Standard OAuth", config: { code } },
+      { name: "PKCE with S256", config: { code, codeVerifier, pkce: true } },
+      { name: "PKCE with 'plain' method", config: { code, codeVerifier, pkce: true, method: "plain" } }
+    ];
+
+    let lastError = null;
+    
+    // Try each approach in order
+    for (const approach of approaches) {
+      try {
+        console.log(`Attempting ${approach.name}...`);
+        const tokenData = await exchangeCodeForToken(approach.config);
+        console.log(`${approach.name} succeeded!`);
+        return res.json(tokenData);
+      } catch (error) {
+        console.log(`${approach.name} failed:`, error.message);
+        lastError = error;
       }
     }
+    
+    // If we get here, all approaches failed
+    return res.json({ 
+      error: 'OAuth authentication failed', 
+      details: 'All authentication approaches failed',
+      lastError: lastError?.message,
+      debugInfo: {
+        codeVerifierLength: codeVerifier ? codeVerifier.length : null,
+        codeVerifierValid: codeVerifier ? /^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier) : false,
+        receivedCode: code ? code.substring(0, 10) + '...' : null
+      },
+      recommendedActions: [
+        'Verify client ID and secret are correct',
+        'Check if Salesforce requires specific PKCE method',
+        'Try setting up a completely new Connected App',
+        'Use a test client (like Postman) to verify if the issue is with n8n or Salesforce'
+      ]
+    });
+    
   } catch (error) {
     console.error('OAuth error:', error);
     return res.status(500).json({ 
@@ -141,27 +141,37 @@ export default async function handler(req, res) {
 
 /**
  * Exchange authorization code for an access token
- * @param {string} code - The authorization code
- * @param {string|null} codeVerifier - The PKCE code verifier if available
+ * @param {Object} config - Configuration for the token exchange
+ * @param {string} config.code - The authorization code
+ * @param {string|null} [config.codeVerifier] - The PKCE code verifier if available
+ * @param {boolean} [config.pkce] - Whether to use PKCE
+ * @param {string} [config.method] - The PKCE method (S256 or plain)
  */
-async function exchangeCodeForToken(code, codeVerifier = null) {
+async function exchangeCodeForToken(config) {
   return new Promise((resolve, reject) => {
     // Create form data
     const data = new URLSearchParams({
       grant_type: 'authorization_code',
-      code: code,
+      code: config.code,
       client_id: process.env.SALESFORCE_CLIENT_ID,
       client_secret: process.env.SALESFORCE_CLIENT_SECRET,
       redirect_uri: REDIRECT_URI
     });
     
-    // Add code_verifier if provided
-    if (codeVerifier) {
-      data.append('code_verifier', codeVerifier);
-      console.log('Including code_verifier in token request');
+    // Add code_verifier if PKCE is enabled
+    if (config.pkce && config.codeVerifier) {
+      data.append('code_verifier', config.codeVerifier);
+      
+      // If using plain method, append it
+      if (config.method === 'plain') {
+        data.append('code_challenge_method', 'plain');
+      }
+      
+      console.log(`Including code_verifier in token request${config.method ? ' with method ' + config.method : ''}`);
     }
     
-    console.log(`Exchanging code for token${codeVerifier ? ' with PKCE' : ' without PKCE'}...`);
+    const pkceStatus = config.pkce ? (config.method || 'S256') : 'disabled';
+    console.log(`Exchanging code for token (PKCE: ${pkceStatus})...`);
     console.log('Request data:', data.toString());
     
     // Parse token URL

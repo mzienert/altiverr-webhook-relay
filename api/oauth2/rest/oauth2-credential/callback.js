@@ -18,42 +18,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Parse state for code_verifier (n8n might be sending it here)
-    let stateData = {};
-    let codeVerifier = null;
+    // Standard OAuth flow without PKCE
+    const tokenData = await exchangeCodeForToken(code);
     
-    if (state) {
-      try {
-        stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-        console.log('State data contains:', Object.keys(stateData));
-        
-        // n8n typically stores the code_verifier as "token" in the state
-        if (stateData.token) {
-          codeVerifier = stateData.token;
-          console.log('Found code_verifier in state data (token field)');
-        }
-      } catch (e) {
-        console.log('Error parsing state:', e);
-      }
-    }
-
-    // First try with PKCE if we have a code_verifier
-    if (codeVerifier) {
-      try {
-        console.log('Attempting token exchange with PKCE...');
-        const tokenData = await exchangeCodeForToken(code, codeVerifier, true);
-        return res.json(tokenData);
-      } catch (error) {
-        console.log('PKCE attempt failed:', error.message);
-        // If PKCE fails, try without it (fallback)
-        console.log('Falling back to standard OAuth flow...');
-      }
-    }
-
-    // Standard OAuth flow without PKCE (fallback)
-    const tokenData = await exchangeCodeForToken(code, null, false);
-    
-    // Return token to client (n8n)
+    // Return token to client
     return res.json(tokenData);
   } catch (error) {
     console.error('OAuth error:', error);
@@ -67,10 +35,8 @@ export default async function handler(req, res) {
 /**
  * Exchange authorization code for an access token
  * @param {string} code - The authorization code
- * @param {string|null} codeVerifier - The PKCE code verifier if available
- * @param {boolean} usePkce - Whether to include the code_verifier in the request
  */
-async function exchangeCodeForToken(code, codeVerifier, usePkce) {
+async function exchangeCodeForToken(code) {
   return new Promise((resolve, reject) => {
     // Create form data
     const data = new URLSearchParams({
@@ -81,13 +47,7 @@ async function exchangeCodeForToken(code, codeVerifier, usePkce) {
       redirect_uri: REDIRECT_URI
     });
     
-    // Add code_verifier if using PKCE
-    if (usePkce && codeVerifier) {
-      data.append('code_verifier', codeVerifier);
-      console.log('Including code_verifier in token request:', codeVerifier.substring(0, 5) + '...');
-    }
-    
-    console.log(`Exchanging code for token${usePkce ? ' with PKCE' : ''}...`);
+    console.log('Exchanging code for token...');
     
     // Parse token URL
     const url = new URL(TOKEN_URL);

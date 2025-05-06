@@ -185,12 +185,27 @@ export default async function handler(req, res) {
       // Create an n8n-friendly response structure
       const responseData = {
         ...tokenData,
-        _debug: {
-          provider: provider.name
+        
+        // Add n8n-specific credential properties for Google OAuth
+        oauthTokenData: {
+          access_token: tokenData.access_token,
+          refresh_token: tokenData.refresh_token,
+          scope: tokenData.scope,
+          token_type: tokenData.token_type,
+          expiry_date: tokenData.expires_in ? Date.now() + (tokenData.expires_in * 1000) : undefined,
+          id_token: tokenData.id_token,
+          service: 'google'
         },
-        // These properties help n8n detect successful auth and close the popup
+        
+        // Signal to n8n that the OAuth flow was successful
+        oauthCallbackReceived: true,
         successfulConnect: true,
-        oauthCallbackReceived: true
+        
+        // Debugging info
+        _debug: {
+          provider: provider.name,
+          timestamp: Date.now()
+        }
       };
       
       // Add credential ID if available
@@ -199,9 +214,8 @@ export default async function handler(req, res) {
       }
       
       // Log the response for debugging
-      console.log('Sending successful response with keys:', Object.keys(responseData));
-      console.log('Access token present:', !!responseData.access_token);
-      console.log('Refresh token present:', !!responseData.refresh_token);
+      console.log('Sending successful response with specific n8n format');
+      console.log('oauthTokenData structure included:', Object.keys(responseData.oauthTokenData));
       
       // Check if we should return JSON or HTML based on the Accept header
       const wantsJson = req.headers.accept && req.headers.accept.includes('application/json');
@@ -252,7 +266,17 @@ export default async function handler(req, res) {
                 if (window.opener && window.opener.postMessage) {
                   window.opener.postMessage({ 
                     type: 'oauth-credential-auth-complete', 
-                    data: data,
+                    data: {
+                      ...data,
+                      providerName: 'google',
+                      oauthTokenData: data.oauthTokenData || {
+                        access_token: data.access_token,
+                        refresh_token: data.refresh_token,
+                        scope: data.scope,
+                        token_type: data.token_type,
+                        expiry_date: data.expires_in ? Date.now() + (data.expires_in * 1000) : undefined
+                      }
+                    },
                     credentialId: "${credentialId || ''}"
                   }, '*');
                 }

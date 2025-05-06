@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>n8n Google OAuth Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      color: #4caf50;
+      border-bottom: 2px solid #4caf50;
+      padding-bottom: 10px;
+    }
+    .card {
+      background: #f9f9f9;
+      border-radius: 5px;
+      padding: 20px;
+      margin: 20px 0;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    label {
+      display: block;
+      margin: 10px 0 5px;
+      font-weight: bold;
+    }
+    input[type="text"], textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-family: monospace;
+    }
+    textarea {
+      height: 80px;
+    }
+    button {
+      background: #4caf50;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 15px;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    .result {
+      background: #f5f5f5;
+      border-left: 4px solid #2196F3;
+      padding: 15px;
+      margin-top: 20px;
+      overflow-x: auto;
+    }
+    .token-container {
+      background: #e8f4fd;
+      border: 1px solid #2196F3;
+      padding: 15px;
+      margin-top: 20px;
+      border-radius: 4px;
+    }
+    .hidden {
+      display: none;
+    }
+    #token-data pre {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .copy-btn {
+      background: #2196F3;
+      padding: 5px 10px;
+      font-size: 12px;
+      margin-left: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>n8n Google OAuth Test</h1>
+  
+  <div class="card">
+    <h2>1. Configure OAuth Parameters</h2>
+    <label for="client-id">Google Client ID:</label>
+    <input type="text" id="client-id" placeholder="Your Google OAuth Client ID">
+    
+    <label for="redirect-uri">Redirect URI:</label>
+    <input type="text" id="redirect-uri" value="https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback" readonly>
+    
+    <label for="scopes">OAuth Scopes:</label>
+    <input type="text" id="scopes" value="https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly" placeholder="Space-separated OAuth scopes">
+    
+    <button id="start-oauth">Start OAuth Flow</button>
+  </div>
+  
+  <div id="token-section" class="card hidden">
+    <h2>2. OAuth Results</h2>
+    <div id="token-message"></div>
+    
+    <div id="token-data" class="token-container hidden">
+      <h3>Token Data <button id="copy-all" class="copy-btn">Copy All</button></h3>
+      <div>
+        <strong>Access Token:</strong> 
+        <span id="access-token"></span>
+        <button id="copy-access" class="copy-btn">Copy</button>
+      </div>
+      <div>
+        <strong>Refresh Token:</strong> 
+        <span id="refresh-token"></span>
+        <button id="copy-refresh" class="copy-btn">Copy</button>
+      </div>
+      <div>
+        <strong>Expires:</strong> <span id="expires"></span>
+      </div>
+      <div>
+        <strong>Scope:</strong> <span id="scope"></span>
+      </div>
+      <div>
+        <strong>Token Type:</strong> <span id="token-type"></span>
+      </div>
+      <h3>Raw JSON:</h3>
+      <pre id="json-data"></pre>
+    </div>
+  </div>
+  
+  <div class="card">
+    <h2>3. n8n Setup Instructions</h2>
+    <ol>
+      <li>In n8n, create a new Google Sheets credential</li>
+      <li>Select <strong>OAuth2</strong> as the Authentication method</li>
+      <li>Enter your Google Client ID and Client Secret</li>
+      <li>For Redirect URL, enter: <code>https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback</code></li>
+      <li>Click "Sign in with Google" and complete the OAuth flow</li>
+      <li>If authentication doesn't work automatically, use the manual token method:
+        <ul>
+          <li>Copy the Access Token and Refresh Token from step 2 above</li>
+          <li>In n8n, switch to "Access Token" authentication method</li>
+          <li>Paste the tokens into the appropriate fields</li>
+        </ul>
+      </li>
+    </ol>
+  </div>
+  
+  <div class="card">
+    <h2>4. Troubleshooting Tips</h2>
+    <ul>
+      <li><strong>Different Google accounts</strong>: Make sure you're signed into the same Google account in both your browser and n8n</li>
+      <li><strong>API access</strong>: Ensure you've enabled both Google Sheets API and Google Drive API in your Google Cloud project</li>
+      <li><strong>CORS issues</strong>: Our webhook relay sets proper CORS headers, but browser security might still block some interactions</li>
+      <li><strong>Cookie/cache issues</strong>: Try using an incognito/private window or clearing your browser cache</li>
+      <li><strong>Redirect issues</strong>: Verify the redirect URL is exactly matching in both Google Cloud Console and n8n</li>
+    </ul>
+  </div>
+  
+  <script>
+    // Function to parse URL parameters
+    function getUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+      const result = {};
+      for (const [key, value] of params) {
+        result[key] = value;
+      }
+      return result;
+    }
+    
+    // Check localStorage for any existing tokens
+    function checkLocalStorage() {
+      try {
+        const n8nOauth = localStorage.getItem('n8n-oauth-response');
+        if (n8nOauth) {
+          const data = JSON.parse(n8nOauth);
+          displayTokenData(data);
+          return true;
+        }
+      } catch (e) {
+        console.error('Error checking localStorage:', e);
+      }
+      return false;
+    }
+    
+    // Start the OAuth flow
+    document.getElementById('start-oauth').addEventListener('click', function() {
+      const clientId = document.getElementById('client-id').value.trim();
+      if (!clientId) {
+        alert('Please enter your Google Client ID');
+        return;
+      }
+      
+      const redirectUri = document.getElementById('redirect-uri').value.trim();
+      const scopes = document.getElementById('scopes').value.trim();
+      
+      // Create a state object with n8n-specific properties
+      const state = {
+        n8n: true,
+        oAuthTokenData: {
+          service: 'google sheets',
+          name: 'Google Sheets'
+        },
+        cid: 'n8n-test-' + Date.now()
+      };
+      
+      // Encode state as base64
+      const encodedState = btoa(JSON.stringify(state));
+      
+      // Build the OAuth URL
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+        `response_type=code` +
+        `&client_id=${encodeURIComponent(clientId)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+        `&scope=${encodeURIComponent(scopes)}` +
+        `&access_type=offline` +
+        `&prompt=consent` + 
+        `&state=${encodedState}`;
+      
+      // Open the OAuth window
+      window.open(authUrl, 'oauth-window', 'width=800,height=600');
+      
+      // Message to the user
+      document.getElementById('token-section').classList.remove('hidden');
+      document.getElementById('token-message').innerHTML = 
+        '<p>OAuth window opened. Please complete the authentication in the popup window.</p>' +
+        '<p>Once completed, this page will update with your token information.</p>';
+      
+      // Set up event listener for the response
+      window.addEventListener('message', function(event) {
+        console.log('Received message:', event);
+        if (event.data && (event.data.type === 'oauth-credential-auth-complete' || event.data.type === 'oauth-token')) {
+          const data = event.data.data || event.data;
+          displayTokenData(data);
+        }
+      });
+      
+      // Check localStorage every second for 20 seconds
+      let attempts = 0;
+      const checkInterval = setInterval(() => {
+        attempts++;
+        if (checkLocalStorage() || attempts > 20) {
+          clearInterval(checkInterval);
+        }
+      }, 1000);
+    });
+    
+    // Display the token data
+    function displayTokenData(data) {
+      document.getElementById('token-data').classList.remove('hidden');
+      document.getElementById('token-message').innerHTML = '<p>✅ Authentication successful! Token data received.</p>';
+      
+      // Display token information
+      const accessToken = data.access_token || (data.oauthTokenData && data.oauthTokenData.access_token);
+      const refreshToken = data.refresh_token || (data.oauthTokenData && data.oauthTokenData.refresh_token);
+      const expiresIn = data.expires_in || (data.oauthTokenData && data.oauthTokenData.expires_in);
+      
+      document.getElementById('access-token').textContent = accessToken ? 
+        accessToken.substring(0, 10) + '...' + accessToken.substring(accessToken.length - 5) : 'Not available';
+      
+      document.getElementById('refresh-token').textContent = refreshToken ? 
+        refreshToken.substring(0, 10) + '...' + refreshToken.substring(refreshToken.length - 5) : 'Not available';
+      
+      document.getElementById('expires').textContent = expiresIn ? 
+        new Date(Date.now() + expiresIn * 1000).toLocaleString() : 'Not available';
+      
+      document.getElementById('scope').textContent = data.scope || (data.oauthTokenData && data.oauthTokenData.scope) || 'Not available';
+      document.getElementById('token-type').textContent = data.token_type || (data.oauthTokenData && data.oauthTokenData.token_type) || 'Not available';
+      
+      // Display raw JSON
+      document.getElementById('json-data').textContent = JSON.stringify(data, null, 2);
+      
+      // Set up copy buttons
+      document.getElementById('copy-access').addEventListener('click', function() {
+        copyToClipboard(accessToken || '');
+        this.textContent = 'Copied!';
+        setTimeout(() => this.textContent = 'Copy', 1500);
+      });
+      
+      document.getElementById('copy-refresh').addEventListener('click', function() {
+        copyToClipboard(refreshToken || '');
+        this.textContent = 'Copied!';
+        setTimeout(() => this.textContent = 'Copy', 1500);
+      });
+      
+      document.getElementById('copy-all').addEventListener('click', function() {
+        copyToClipboard(JSON.stringify(data, null, 2));
+        this.textContent = 'Copied!';
+        setTimeout(() => this.textContent = 'Copy All', 1500);
+      });
+    }
+    
+    // Helper function to copy text to clipboard
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).catch(err => {
+        console.error('Failed to copy: ', err);
+      });
+    }
+    
+    // Check for existing tokens on page load
+    window.addEventListener('DOMContentLoaded', function() {
+      checkLocalStorage();
+    });
+  </script>
+</body>
+</html> 

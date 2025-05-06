@@ -3,16 +3,11 @@
 # Load environment variables
 source .env
 
+# Deploy to Vercel
 echo "Deploying to Vercel..."
 
-# Check if vercel CLI is installed
-if ! command -v vercel &> /dev/null; then
-    echo "Vercel CLI not found. Installing globally..."
-    npm install -g vercel
-fi
-
-# Deploy to production
-vercel --prod --token "${VERCEL_TOKEN}"
+# Run the deployment command
+vercel --prod
 
 echo "Deployment complete!"
 echo "Run ./test-webhook.sh to test the webhook"

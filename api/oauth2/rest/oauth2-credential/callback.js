@@ -83,6 +83,7 @@ function getProviderAuthUrls() {
 function detectProvider(req) {
   // Check if the provider is explicitly specified in the query
   if (req.query.provider && PROVIDERS[req.query.provider]) {
+    console.log('Provider explicitly specified:', req.query.provider);
     return req.query.provider;
   }
   
@@ -91,11 +92,13 @@ function detectProvider(req) {
     try {
       const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
       if (stateData.provider && PROVIDERS[stateData.provider]) {
+        console.log('Provider extracted from state:', stateData.provider);
         return stateData.provider;
       }
       
       // n8n specific: check for oAuthTokenData which might contain service info
       if (stateData.oAuthTokenData && stateData.oAuthTokenData.service) {
+        console.log('oAuthTokenData found in state:', stateData.oAuthTokenData);
         const service = stateData.oAuthTokenData.service.toLowerCase();
         if (service.includes('google')) return 'google';
         if (service.includes('slack')) return 'slack';
@@ -107,10 +110,12 @@ function detectProvider(req) {
 
   // Check common patterns in the query parameters
   if (req.query.error_uri && req.query.error_uri.includes('google')) {
+    console.log('Google error detected in query parameters');
     return 'google';
   }
   
   if (req.query.error_description && req.query.error_description.includes('slack')) {
+    console.log('Slack error detected in query parameters');
     return 'slack';
   }
   

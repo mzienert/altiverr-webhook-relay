@@ -179,13 +179,73 @@ export default async function handler(req, res) {
       });
       
       console.log('OAuth code exchange succeeded!');
-      return res.json({
+      
+      // Create an n8n-friendly response structure
+      const responseData = {
         ...tokenData,
         _debug: {
           provider: provider.name
         },
-        successfulConnect: true
-      });
+        // These properties help n8n detect successful auth and close the popup
+        successfulConnect: true,
+        oauthCallbackReceived: true
+      };
+      
+      // Extract the credential ID if present in state data
+      if (stateData && stateData.cid) {
+        responseData.credentialId = stateData.cid;
+      }
+      
+      // Create an HTML response with auto-close script for browser popups
+      const htmlResponse = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Authentication Successful</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; text-align: center; padding: 40px; }
+            h1 { color: #4caf50; }
+            p { margin: 20px 0; }
+            .data { display: none; }
+          </style>
+        </head>
+        <body>
+          <h1>Authentication Successful!</h1>
+          <p>You can now close this window and return to n8n.</p>
+          <p>Closing automatically in <span id="countdown">3</span> seconds...</p>
+          <div id="response-data" class="data">${JSON.stringify(responseData)}</div>
+          <script>
+            // Store response data in localStorage for n8n to retrieve
+            const data = JSON.parse(document.getElementById('response-data').textContent);
+            window.localStorage.setItem('n8n-oauth-response', JSON.stringify(data));
+            
+            // Send a message to the parent window (n8n) if in iframe
+            try {
+              if (window.opener && window.opener.postMessage) {
+                window.opener.postMessage({ type: 'oauth-credential-auth-complete', data }, '*');
+              }
+            } catch (e) {
+              console.error('Error posting message to parent:', e);
+            }
+            
+            // Countdown and close window
+            let seconds = 3;
+            const countdown = setInterval(() => {
+              seconds--;
+              document.getElementById('countdown').textContent = seconds;
+              if (seconds <= 0) {
+                clearInterval(countdown);
+                window.close();
+              }
+            }, 1000);
+          </script>
+        </body>
+        </html>
+      `;
+      
+      // Set content type to HTML and send the response
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(htmlResponse);
     } catch (error) {
       console.log(`OAuth code exchange failed:`, error.message);
       
@@ -208,19 +268,35 @@ export default async function handler(req, res) {
         ];
       }
       
-      return res.status(200).json({ 
-        error: 'OAuth authentication failed', 
-        details: `Authentication for ${provider.name} failed`,
-        errorMessage: error.message,
-        debugInfo: {
-          provider: provider.name,
-          scopes: scopes || provider.defaultScopes,
-          receivedCode: code ? code.substring(0, 10) + '...' : null
-        },
-        recommendedAction,
-        requiredSettings,
-        successfulConnect: false
-      });
+      // Create an HTML error response
+      const htmlErrorResponse = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Authentication Failed</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; text-align: center; padding: 40px; }
+            h1 { color: #f44336; }
+            p { margin: 20px 0; }
+            .error { color: #f44336; font-weight: bold; }
+            ul { text-align: left; display: inline-block; }
+          </style>
+        </head>
+        <body>
+          <h1>Authentication Failed</h1>
+          <p class="error">${error.message}</p>
+          <p>${recommendedAction}</p>
+          <ul>
+            ${requiredSettings.map(setting => `<li>${setting}</li>`).join('')}
+          </ul>
+          <p>Please close this window and try again.</p>
+        </body>
+        </html>
+      `;
+      
+      // Set content type to HTML and send the error response
+      res.setHeader('Content-Type', 'text/html');
+      return res.status(200).send(htmlErrorResponse);
     }
     
   } catch (error) {

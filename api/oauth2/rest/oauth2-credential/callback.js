@@ -133,6 +133,12 @@ export default async function handler(req, res) {
     });
   }
   
+  // Log request details
+  console.log('OAuth Callback Request Headers:', req.headers);
+  console.log('OAuth Callback Request Query:', req.query);
+  console.log('OAuth Callback User Agent:', req.headers['user-agent']);
+  console.log('OAuth Callback Referrer:', req.headers['referer']);
+  
   // Only accept GET requests
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -160,6 +166,7 @@ export default async function handler(req, res) {
       try {
         stateData = JSON.parse(Buffer.from(state, 'base64').toString());
         console.log('State data contains:', Object.keys(stateData));
+        console.log('Full state data:', stateData);
         
         // Extract scopes if available
         if (stateData.scopes) {
@@ -182,49 +189,50 @@ export default async function handler(req, res) {
       const credentialId = stateData && stateData.cid ? stateData.cid : null;
       console.log('Credential ID from state:', credentialId);
       
-      // Create an n8n-friendly response structure
+      // Format tokens in the exact n8n expected structure
+      // This is critical to ensure n8n recognizes the successful auth
       const responseData = {
-        ...tokenData,
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        scope: tokenData.scope,
+        token_type: tokenData.token_type,
+        expires_in: tokenData.expires_in,
         
-        // Add n8n-specific credential properties for Google OAuth
+        // n8n specific data structure
         oauthTokenData: {
           access_token: tokenData.access_token,
           refresh_token: tokenData.refresh_token,
           scope: tokenData.scope,
           token_type: tokenData.token_type,
           expiry_date: tokenData.expires_in ? Date.now() + (tokenData.expires_in * 1000) : undefined,
-          id_token: tokenData.id_token,
-          service: 'google'
+          id_token: tokenData.id_token
         },
         
-        // Signal to n8n that the OAuth flow was successful
+        // These flags trigger n8n to recognize success
         oauthCallbackReceived: true,
         successfulConnect: true,
         
-        // Debugging info
-        _debug: {
-          provider: provider.name,
-          timestamp: Date.now()
-        }
+        // Include the credential ID if available
+        ...(credentialId ? { credentialId } : {})
       };
       
-      // Add credential ID if available
-      if (credentialId) {
-        responseData.credentialId = credentialId;
-      }
-      
       // Log the response for debugging
-      console.log('Sending successful response with specific n8n format');
-      console.log('oauthTokenData structure included:', Object.keys(responseData.oauthTokenData));
+      console.log('Sending formatted n8n response with these token details:');
+      console.log('- access_token exists:', !!responseData.access_token);
+      console.log('- refresh_token exists:', !!responseData.refresh_token);
+      console.log('- oauthTokenData structure included:', Object.keys(responseData.oauthTokenData));
       
-      // Check if we should return JSON or HTML based on the Accept header
+      // Check if we should return JSON or HTML based on the Accept header and origin
       const wantsJson = req.headers.accept && req.headers.accept.includes('application/json');
+      const isN8nRequest = req.headers['user-agent']?.includes('n8n') || 
+                           req.headers.origin?.includes('n8n') ||
+                           req.headers.referer?.includes('n8n');
       
-      if (wantsJson) {
-        console.log('Returning JSON response as requested');
+      if (wantsJson || isN8nRequest) {
+        console.log('Returning JSON response for n8n');
         return res.json(responseData);
       } else {
-        console.log('Returning HTML response with embedded data');
+        console.log('Returning HTML response with embedded data for browser');
         // Create an HTML response with auto-close script for browser popups
         const htmlResponse = `
           <!DOCTYPE html>
@@ -248,36 +256,34 @@ export default async function handler(req, res) {
               const data = JSON.parse(document.getElementById('response-data').textContent);
               
               try {
-                // Store in local storage - some n8n versions use this
+                // Store in localStorage - specific n8n format
                 window.localStorage.setItem('n8n-oauth-response', JSON.stringify(data));
                 
-                // n8n checks for this specific field
+                // n8n checks for this specific field format
                 window.localStorage.setItem('n8n-oauth-state', JSON.stringify({
-                  ...data,
-                  cid: "${credentialId || ''}",
+                  token: data.access_token,
+                  refreshToken: data.refresh_token,
+                  scope: data.scope,
+                  tokenType: data.token_type,
+                  expiresIn: data.expires_in,
+                  oauthTokenData: data.oauthTokenData,
+                  ...(data.credentialId ? { cid: data.credentialId } : {}),
                   closeWindow: true
                 }));
+                
+                console.log('Successfully stored oauth data in localStorage');
               } catch (e) {
                 console.error('Error setting localStorage:', e);
               }
               
-              // Send a message to the parent window (n8n) - newer n8n versions use this
+              // Send a message to the parent window (n8n)
               try {
                 if (window.opener && window.opener.postMessage) {
+                  console.log('Sending postMessage to parent window');
                   window.opener.postMessage({ 
                     type: 'oauth-credential-auth-complete', 
-                    data: {
-                      ...data,
-                      providerName: 'google',
-                      oauthTokenData: data.oauthTokenData || {
-                        access_token: data.access_token,
-                        refresh_token: data.refresh_token,
-                        scope: data.scope,
-                        token_type: data.token_type,
-                        expiry_date: data.expires_in ? Date.now() + (data.expires_in * 1000) : undefined
-                      }
-                    },
-                    credentialId: "${credentialId || ''}"
+                    data: data,
+                    ...(data.credentialId ? { credentialId: data.credentialId } : {})
                   }, '*');
                 }
               } catch (e) {

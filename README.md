@@ -124,3 +124,83 @@ Slack's OAuth implementation requires a specific flow:
    - Required for operations like channel management and message posting
 
 The endpoint is designed to handle future n8n OAuth integrations (GitHub, Google, etc.) using the same callback path.
+
+# Altiverr Webhook Relay
+
+This service provides a generic OAuth relay for n8n workflows, allowing authentication with multiple services through a single callback URL.
+
+## Supported OAuth Providers
+
+- **Google** - For Google Sheets and other Google API integrations
+- **Slack** - For Slack API integrations
+
+## How It Works
+
+The webhook relay provides a unified OAuth callback endpoint that handles authentication for different providers. When used with n8n, you can configure the OAuth credential to use the following callback URL:
+
+```
+https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback
+```
+
+The system will automatically detect which provider is being used based on the incoming callback data and handle the OAuth token exchange appropriately.
+
+## Adding New OAuth Providers
+
+To add a new OAuth provider:
+
+1. Edit `api/oauth2/rest/oauth2-credential/callback.js` and add the provider to the `PROVIDERS` object:
+
+```javascript
+const PROVIDERS = {
+  // Existing providers...
+  
+  newprovider: {
+    name: 'New Provider',
+    tokenUrl: 'https://provider.com/oauth/token',
+    authUrl: 'https://provider.com/oauth/authorize',
+    clientIdEnv: 'NEW_PROVIDER_CLIENT_ID',
+    clientSecretEnv: 'NEW_PROVIDER_CLIENT_SECRET',
+    supportsPkce: true, // Whether the provider supports PKCE
+    requiresPkce: false, // Whether PKCE is required
+    defaultScopes: ['scope1', 'scope2'] // Default scopes to request
+  }
+}
+```
+
+2. Update the `detectProvider` function to identify the new provider from callback parameters or state data.
+
+3. Add provider-specific error handling and recommendations in the error response section.
+
+## Authentication Debugging
+
+The system includes a debug endpoint that shows authentication URLs for all configured providers:
+
+```
+https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback?debug=auth_urls
+```
+
+## Environment Variables
+
+The following environment variables are required:
+
+- `GOOGLE_CLIENT_ID` - Google OAuth client ID
+- `GOOGLE_CLIENT_SECRET` - Google OAuth client secret
+- `SLACK_CLIENT_ID` - Slack OAuth client ID
+- `SLACK_CLIENT_SECRET` - Slack OAuth client secret
+
+## OAuth Configuration Notes
+
+### Google
+
+1. Create a project in Google Cloud Console
+2. Enable required APIs (Google Sheets API, Google Drive API)
+3. Configure the OAuth consent screen
+4. Create OAuth credentials and add the redirect URL
+5. Set the required environment variables
+
+### Slack
+
+1. Create a Slack App at api.slack.com
+2. Add the redirect URL to your app configuration
+3. Add required scopes to your app
+4. Set the required environment variables

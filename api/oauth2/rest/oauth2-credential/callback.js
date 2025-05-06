@@ -1,10 +1,32 @@
 const https = require('https');
 const crypto = require('crypto');
 
+// Provider configurations
+const PROVIDERS = {
+  google: {
+    name: 'Google',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    clientIdEnv: 'GOOGLE_CLIENT_ID',
+    clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
+    supportsPkce: true,
+    requiresPkce: false,
+    defaultScopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.readonly']
+  },
+  slack: {
+    name: 'Slack',
+    tokenUrl: 'https://slack.com/api/oauth.v2.access',
+    authUrl: 'https://slack.com/oauth/v2/authorize',
+    clientIdEnv: 'SLACK_CLIENT_ID',
+    clientSecretEnv: 'SLACK_CLIENT_SECRET',
+    supportsPkce: false,
+    requiresPkce: false,
+    defaultScopes: ['channels:read', 'chat:write', 'incoming-webhook']
+  }
+};
+
 // Configuration
 const REDIRECT_URI = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
-const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
-const AUTH_URL = 'https://login.salesforce.com/services/oauth2/authorize';
 
 /**
  * Base64URL encoding function as per RFC 7636
@@ -78,24 +100,124 @@ function ensureValidCodeVerifier(verifier) {
 
 /**
  * Generates a proper OAuth authorization URL with PKCE
+ * @param {string} providerKey - The provider key
  * @param {string} codeVerifier - The code verifier to use
+ * @param {string[]} [scopes] - Optional scopes to request
  * @returns {string} The authorization URL
  */
-function generateAuthUrl(codeVerifier) {
+function generateAuthUrl(providerKey, codeVerifier, scopes) {
+  const provider = PROVIDERS[providerKey];
+  if (!provider) throw new Error(`Unknown provider: ${providerKey}`);
+  
   const codeChallenge = generateCodeChallenge(codeVerifier);
   
   const params = new URLSearchParams({
     response_type: 'code',
-    client_id: process.env.SALESFORCE_CLIENT_ID,
-    redirect_uri: REDIRECT_URI,
-    code_challenge: codeChallenge,
-    code_challenge_method: 'S256'
+    client_id: process.env[provider.clientIdEnv],
+    redirect_uri: REDIRECT_URI
   });
   
-  return `${AUTH_URL}?${params.toString()}`;
+  // Add scopes if provided, otherwise use defaults
+  const scopesToUse = scopes || provider.defaultScopes;
+  if (scopesToUse && scopesToUse.length > 0) {
+    params.append('scope', scopesToUse.join(' '));
+  }
+  
+  if (provider.supportsPkce) {
+    params.append('code_challenge', codeChallenge);
+    params.append('code_challenge_method', 'S256');
+  }
+  
+  return `${provider.authUrl}?${params.toString()}`;
+}
+
+/**
+ * Generates authorization URLs for each provider
+ * This is useful for debugging and documentation
+ */
+function getProviderAuthUrls() {
+  const urls = {};
+  
+  // Generate a valid code verifier
+  const codeVerifier = base64URLEncode(crypto.randomBytes(32));
+  
+  // Generate URLs for each provider
+  Object.keys(PROVIDERS).forEach(key => {
+    try {
+      const provider = PROVIDERS[key];
+      if (provider.supportsPkce) {
+        urls[key] = generateAuthUrl(key, codeVerifier);
+      } else {
+        // For providers without PKCE, generate a simpler URL
+        const params = new URLSearchParams({
+          response_type: 'code',
+          client_id: `[${provider.clientIdEnv}]`, // Placeholder
+          redirect_uri: REDIRECT_URI,
+          scope: provider.defaultScopes.join(' ')
+        });
+        urls[key] = `${provider.authUrl}?${params.toString()}`;
+      }
+    } catch (e) {
+      urls[key] = `Error: ${e.message}`;
+    }
+  });
+  
+  return urls;
+}
+
+/**
+ * Detect the OAuth provider from the request
+ * @param {Object} req - The request object
+ * @returns {string|null} - The provider key or null if not detected
+ */
+function detectProvider(req) {
+  // Check if the provider is explicitly specified in the query
+  if (req.query.provider && PROVIDERS[req.query.provider]) {
+    return req.query.provider;
+  }
+  
+  // Try to extract from state parameter
+  if (req.query.state) {
+    try {
+      const stateData = JSON.parse(Buffer.from(req.query.state, 'base64').toString());
+      if (stateData.provider && PROVIDERS[stateData.provider]) {
+        return stateData.provider;
+      }
+      
+      // n8n specific: check for oAuthTokenData which might contain service info
+      if (stateData.oAuthTokenData && stateData.oAuthTokenData.service) {
+        const service = stateData.oAuthTokenData.service.toLowerCase();
+        if (service.includes('google')) return 'google';
+        if (service.includes('slack')) return 'slack';
+      }
+    } catch (e) {
+      console.log('Error parsing state:', e);
+    }
+  }
+
+  // Check common patterns in the query parameters
+  if (req.query.error_uri && req.query.error_uri.includes('google')) {
+    return 'google';
+  }
+  
+  if (req.query.error_description && req.query.error_description.includes('slack')) {
+    return 'slack';
+  }
+  
+  // Default to Google for most common usage
+  return 'google';
 }
 
 export default async function handler(req, res) {
+  // Handle special debug endpoint
+  if (req.query.debug === 'auth_urls') {
+    return res.json({
+      debug: "Auth URL generation for testing",
+      providers: getProviderAuthUrls(),
+      redirectUri: REDIRECT_URI
+    });
+  }
+  
   // Only accept GET requests
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -109,15 +231,27 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
+    // Detect which provider we're working with
+    const providerKey = detectProvider(req);
+    const provider = PROVIDERS[providerKey];
+    
+    console.log(`Detected OAuth provider: ${provider.name}`);
+
     // Parse state for code_verifier (n8n might be sending it here)
     let stateData = {};
     let codeVerifier = null;
     let originalVerifier = null;
+    let scopes = null;
     
     if (state) {
       try {
         stateData = JSON.parse(Buffer.from(state, 'base64').toString());
         console.log('State data contains:', Object.keys(stateData));
+        
+        // Extract scopes if available
+        if (stateData.scopes) {
+          scopes = Array.isArray(stateData.scopes) ? stateData.scopes : [stateData.scopes];
+        }
         
         // n8n typically stores the code_verifier as "token" in the state
         if (stateData.token) {
@@ -142,8 +276,8 @@ export default async function handler(req, res) {
     }
 
     // Generate a proper authorization URL for debugging
-    if (codeVerifier) {
-      const properAuthUrl = generateAuthUrl(codeVerifier);
+    if (codeVerifier && provider.supportsPkce) {
+      const properAuthUrl = generateAuthUrl(providerKey, codeVerifier, scopes);
       console.log('For reference, a proper authorization URL would be:', properAuthUrl);
     }
 
@@ -151,15 +285,15 @@ export default async function handler(req, res) {
     const approaches = [];
     
     // Try standard OAuth without PKCE first
-    approaches.push({ name: "Standard OAuth without PKCE", config: { code } });
+    approaches.push({ name: "Standard OAuth without PKCE", config: { code, provider: providerKey, scopes } });
     
-    // If we have a valid code verifier, try PKCE methods
-    if (codeVerifier) {
-      approaches.push({ name: "PKCE with S256", config: { code, codeVerifier, pkce: true } });
+    // If provider supports PKCE and we have a valid code verifier, try PKCE methods
+    if (provider.supportsPkce && codeVerifier) {
+      approaches.push({ name: "PKCE with S256", config: { code, codeVerifier, provider: providerKey, pkce: true, scopes } });
       
       // Try with original verifier as last resort
       if (originalVerifier !== codeVerifier) {
-        approaches.push({ name: "PKCE with original verifier", config: { code, codeVerifier: originalVerifier, pkce: true } });
+        approaches.push({ name: "PKCE with original verifier", config: { code, codeVerifier: originalVerifier, provider: providerKey, pkce: true, scopes } });
       }
     }
 
@@ -175,8 +309,10 @@ export default async function handler(req, res) {
         return res.json({
           ...tokenData,
           _debug: {
-            successMethod: approach.name
-          }
+            successMethod: approach.name,
+            provider: provider.name
+          },
+          successfulConnect: true
         });
       } catch (error) {
         console.log(`${approach.name} failed:`, error.message);
@@ -185,27 +321,42 @@ export default async function handler(req, res) {
       }
     }
     
+    // Provider-specific error messages
+    let recommendedAction = "";
+    let requiredSettings = [];
+    
+    if (providerKey === 'google') {
+      recommendedAction = "Make sure you have configured the OAuth consent screen and enabled the required APIs:";
+      requiredSettings = [
+        "Google Sheets API",
+        "Google Drive API",
+        "Make sure your authorized redirect URI is correctly set"
+      ];
+    } else if (providerKey === 'slack') {
+      recommendedAction = "Ensure your Slack app is configured correctly:";
+      requiredSettings = [
+        "Add the OAuth Redirect URL in your Slack app settings",
+        "Ensure you have the required scopes"
+      ];
+    }
+    
     // If we get here, all approaches failed
     return res.status(200).json({ 
       error: 'OAuth authentication failed', 
-      details: 'All approaches failed - you MUST disable PKCE in Salesforce Connected App settings',
+      details: `All authentication approaches for ${provider.name} failed`,
       lastError: lastError?.message,
       allErrors,
       debugInfo: {
+        provider: provider.name,
         codeVerifierOriginal: originalVerifier,
         codeVerifierLength: originalVerifier ? originalVerifier.length : null,
         codeVerifierFixed: codeVerifier,
         codeVerifierValid: codeVerifier ? /^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier) : false,
         receivedCode: code ? code.substring(0, 10) + '...' : null
       },
-      recommendedActionFromN8n: "According to n8n docs, these settings MUST BE UNCHECKED in your Salesforce Connected App:",
-      requiredSettings: [
-        "Require Proof Key for Code Exchange (PKCE)",
-        "Require Secret for Web Server Flow", 
-        "Require Secret for Refresh Token Flow"
-      ],
-      successfulConnect: false,
-      setupInstructions: "Please visit the Salesforce Connected App settings, uncheck the three settings above, wait a few minutes, and try again."
+      recommendedAction,
+      requiredSettings,
+      successfulConnect: false
     });
     
   } catch (error) {
@@ -221,32 +372,44 @@ export default async function handler(req, res) {
  * Exchange authorization code for an access token
  * @param {Object} config - Configuration for the token exchange
  * @param {string} config.code - The authorization code
+ * @param {string} config.provider - The provider key
  * @param {string|null} [config.codeVerifier] - The PKCE code verifier if available
  * @param {boolean} [config.pkce] - Whether to use PKCE
+ * @param {string[]} [config.scopes] - OAuth scopes to request
  */
 async function exchangeCodeForToken(config) {
   return new Promise((resolve, reject) => {
+    const provider = PROVIDERS[config.provider];
+    if (!provider) {
+      return reject(new Error(`Unknown provider: ${config.provider}`));
+    }
+    
     // Create form data
     const data = new URLSearchParams({
       grant_type: 'authorization_code',
       code: config.code,
-      client_id: process.env.SALESFORCE_CLIENT_ID,
-      client_secret: process.env.SALESFORCE_CLIENT_SECRET,
+      client_id: process.env[provider.clientIdEnv],
+      client_secret: process.env[provider.clientSecretEnv],
       redirect_uri: REDIRECT_URI
     });
     
-    // Add code_verifier if PKCE is enabled
-    if (config.pkce && config.codeVerifier) {
+    // Add code_verifier if PKCE is enabled and provider supports it
+    if (config.pkce && config.codeVerifier && provider.supportsPkce) {
       data.append('code_verifier', config.codeVerifier);
       console.log('Including code_verifier in token request');
     }
     
+    // Add scopes if provided
+    if (config.scopes && config.scopes.length > 0) {
+      data.append('scope', config.scopes.join(' '));
+    }
+    
     const pkceStatus = config.pkce ? 'enabled' : 'disabled';
-    console.log(`Exchanging code for token (PKCE: ${pkceStatus})...`);
+    console.log(`Exchanging code for token with ${provider.name} (PKCE: ${pkceStatus})...`);
     console.log('Request data:', data.toString());
     
     // Parse token URL
-    const url = new URL(TOKEN_URL);
+    const url = new URL(provider.tokenUrl);
     
     // Request options
     const options = {
@@ -272,7 +435,15 @@ async function exchangeCodeForToken(config) {
       
       res.on('end', () => {
         try {
-          const parsedData = JSON.parse(responseData);
+          let parsedData;
+          try {
+            parsedData = JSON.parse(responseData);
+          } catch (e) {
+            // Some providers might not return valid JSON
+            console.error('Failed to parse response as JSON:', responseData);
+            reject(new Error('Failed to parse token response'));
+            return;
+          }
           
           if (res.statusCode !== 200) {
             console.error('Token response error:', res.statusCode, parsedData);
@@ -287,14 +458,16 @@ async function exchangeCodeForToken(config) {
           console.log('Token received successfully:', {
             has_access_token: !!parsedData.access_token,
             has_refresh_token: !!parsedData.refresh_token,
-            token_type: parsedData.token_type,
-            instance_url: parsedData.instance_url
+            token_type: parsedData.token_type
           });
+          
+          // Add provider info to the token data
+          parsedData.provider = provider.name;
           
           resolve(parsedData);
         } catch (error) {
-          console.error('Error parsing token response', error);
-          reject(new Error('Failed to parse token response'));
+          console.error('Error handling token response', error);
+          reject(new Error('Failed to handle token response'));
         }
       });
     });

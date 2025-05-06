@@ -22,6 +22,16 @@ const PROVIDERS = {
 
 // Configuration
 const REDIRECT_URI = 'https://altiverr-webhook-relay.vercel.app/api/oauth2/rest/oauth2-credential/callback';
+const DEBUG_MODE = true; // Enable detailed logging
+
+/**
+ * Enhanced logging function that provides more context
+ */
+function log(...args) {
+  if (DEBUG_MODE) {
+    console.log(`[OAuth Debug ${new Date().toISOString()}]`, ...args);
+  }
+}
 
 /**
  * Generates an authorization URL for a provider
@@ -134,10 +144,10 @@ export default async function handler(req, res) {
   }
   
   // Log request details
-  console.log('OAuth Callback Request Headers:', req.headers);
-  console.log('OAuth Callback Request Query:', req.query);
-  console.log('OAuth Callback User Agent:', req.headers['user-agent']);
-  console.log('OAuth Callback Referrer:', req.headers['referer']);
+  log('OAuth Callback Request Headers:', req.headers);
+  log('OAuth Callback Request Query:', req.query);
+  log('OAuth Callback User Agent:', req.headers['user-agent']);
+  log('OAuth Callback Referrer:', req.headers['referer']);
   
   // Only accept GET requests
   if (req.method !== 'GET') {
@@ -145,7 +155,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    console.log('Received callback:', req.query);
+    log('Received callback:', req.query);
     
     const { code, state } = req.query;
     if (!code) {
@@ -156,29 +166,37 @@ export default async function handler(req, res) {
     const providerKey = detectProvider(req);
     const provider = PROVIDERS[providerKey];
     
-    console.log(`Detected OAuth provider: ${provider.name}`);
+    log(`Detected OAuth provider: ${provider.name}`);
 
     // Parse state for additional information
     let stateData = {};
     let scopes = null;
+    let isN8n = false;
     
     if (state) {
       try {
         stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-        console.log('State data contains:', Object.keys(stateData));
-        console.log('Full state data:', stateData);
+        log('State data contains:', Object.keys(stateData));
+        log('Full state data:', stateData);
+        
+        // Check if this is an n8n request
+        isN8n = stateData.oAuthTokenData || 
+                stateData.n8n || 
+                (stateData.cid && stateData.cid.length > 5);
+        
+        log('Is n8n request:', isN8n);
         
         // Extract scopes if available
         if (stateData.scopes) {
           scopes = Array.isArray(stateData.scopes) ? stateData.scopes : [stateData.scopes];
         }
       } catch (e) {
-        console.log('Error parsing state:', e);
+        log('Error parsing state:', e);
       }
     }
 
     try {
-      console.log('Attempting OAuth code exchange...');
+      log('Attempting OAuth code exchange...');
       const tokenData = await exchangeCodeForToken({
         code,
         provider: providerKey,
@@ -187,7 +205,7 @@ export default async function handler(req, res) {
       
       // Extract the credential ID if present in state data
       const credentialId = stateData && stateData.cid ? stateData.cid : null;
-      console.log('Credential ID from state:', credentialId);
+      log('Credential ID from state:', credentialId);
       
       // Format tokens in the exact n8n expected structure
       // This is critical to ensure n8n recognizes the successful auth
@@ -198,7 +216,7 @@ export default async function handler(req, res) {
         token_type: tokenData.token_type,
         expires_in: tokenData.expires_in,
         
-        // n8n specific data structure
+        // n8n specific data structure - this should match their expected format exactly
         oauthTokenData: {
           access_token: tokenData.access_token,
           refresh_token: tokenData.refresh_token,
@@ -217,22 +235,29 @@ export default async function handler(req, res) {
       };
       
       // Log the response for debugging
-      console.log('Sending formatted n8n response with these token details:');
-      console.log('- access_token exists:', !!responseData.access_token);
-      console.log('- refresh_token exists:', !!responseData.refresh_token);
-      console.log('- oauthTokenData structure included:', Object.keys(responseData.oauthTokenData));
+      log('Sending formatted n8n response with these token details:');
+      log('- access_token exists:', !!responseData.access_token);
+      log('- refresh_token exists:', !!responseData.refresh_token);
+      log('- oauthTokenData structure included:', Object.keys(responseData.oauthTokenData));
       
       // Check if we should return JSON or HTML based on the Accept header and origin
       const wantsJson = req.headers.accept && req.headers.accept.includes('application/json');
       const isN8nRequest = req.headers['user-agent']?.includes('n8n') || 
                            req.headers.origin?.includes('n8n') ||
-                           req.headers.referer?.includes('n8n');
+                           req.headers.referer?.includes('n8n') ||
+                           isN8n;
       
       if (wantsJson || isN8nRequest) {
-        console.log('Returning JSON response for n8n');
+        log('Returning JSON response for n8n');
+        
+        // Set CORS headers to ensure n8n can access the response
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        
         return res.json(responseData);
       } else {
-        console.log('Returning HTML response with embedded data for browser');
+        log('Returning HTML response with embedded data for browser');
         // Create an HTML response with auto-close script for browser popups
         const htmlResponse = `
           <!DOCTYPE html>
@@ -244,18 +269,40 @@ export default async function handler(req, res) {
               h1 { color: #4caf50; }
               p { margin: 20px 0; }
               .data { display: none; }
+              .debug { background: #f5f5f5; border: 1px solid #ddd; padding: 10px; margin: 20px 0; text-align: left; }
+              button { background: #4caf50; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; margin: 5px; }
+              button:hover { background: #45a049; }
             </style>
           </head>
           <body>
             <h1>Authentication Successful!</h1>
             <p>You can now close this window and return to n8n.</p>
-            <p>Closing automatically in <span id="countdown">3</span> seconds...</p>
+            <p>Closing automatically in <span id="countdown">5</span> seconds...</p>
+            
+            <div>
+              <button id="copy-token-btn">Copy Access Token</button>
+              <button id="copy-refresh-btn">Copy Refresh Token</button>
+              <button id="show-debug-btn">Show Debug Info</button>
+            </div>
+            
+            <div id="debug-info" class="debug" style="display: none;">
+              <h3>Debug Information</h3>
+              <p>If n8n isn't detecting your authentication, you may need to manually enter these values:</p>
+              <p><strong>Access Token:</strong> <span id="access-token-display">${tokenData.access_token.substring(0, 10)}...</span></p>
+              <p><strong>Refresh Token:</strong> <span id="refresh-token-display">${tokenData.refresh_token ? tokenData.refresh_token.substring(0, 10) + '...' : 'Not provided'}</span></p>
+              <p><strong>Expiry:</strong> ${tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000).toLocaleString() : 'Not provided'}</p>
+            </div>
+            
             <div id="response-data" class="data">${JSON.stringify(responseData)}</div>
             <script>
               // Store response data in localStorage for n8n to retrieve
               const data = JSON.parse(document.getElementById('response-data').textContent);
+              console.log('OAuth data received:', data);
               
               try {
+                // Store in localStorage - standard way
+                window.localStorage.setItem('oauth-data', JSON.stringify(data));
+                
                 // Store in localStorage - specific n8n format
                 window.localStorage.setItem('n8n-oauth-response', JSON.stringify(data));
                 
@@ -280,24 +327,62 @@ export default async function handler(req, res) {
               try {
                 if (window.opener && window.opener.postMessage) {
                   console.log('Sending postMessage to parent window');
+                  // Try multiple message formats to ensure compatibility
                   window.opener.postMessage({ 
                     type: 'oauth-credential-auth-complete', 
                     data: data,
                     ...(data.credentialId ? { credentialId: data.credentialId } : {})
+                  }, '*');
+                  
+                  window.opener.postMessage({
+                    type: 'oauth-token',
+                    data: {
+                      token: data.access_token,
+                      refreshToken: data.refresh_token,
+                      scope: data.scope,
+                      tokenType: data.token_type,
+                      expiresIn: data.expires_in,
+                      ...(data.credentialId ? { credentialId: data.credentialId } : {})
+                    }
                   }, '*');
                 }
               } catch (e) {
                 console.error('Error posting message to parent:', e);
               }
               
+              // Add button functionality
+              document.getElementById('copy-token-btn').addEventListener('click', function() {
+                navigator.clipboard.writeText(data.access_token);
+                this.textContent = 'Access Token Copied!';
+                setTimeout(() => this.textContent = 'Copy Access Token', 2000);
+              });
+              
+              document.getElementById('copy-refresh-btn').addEventListener('click', function() {
+                navigator.clipboard.writeText(data.refresh_token || '');
+                this.textContent = 'Refresh Token Copied!';
+                setTimeout(() => this.textContent = 'Copy Refresh Token', 2000);
+              });
+              
+              document.getElementById('show-debug-btn').addEventListener('click', function() {
+                const debugInfo = document.getElementById('debug-info');
+                if (debugInfo.style.display === 'none') {
+                  debugInfo.style.display = 'block';
+                  this.textContent = 'Hide Debug Info';
+                } else {
+                  debugInfo.style.display = 'none';
+                  this.textContent = 'Show Debug Info';
+                }
+              });
+              
               // Countdown and close window
-              let seconds = 3;
+              let seconds = 5;
               const countdown = setInterval(() => {
                 seconds--;
                 document.getElementById('countdown').textContent = seconds;
                 if (seconds <= 0) {
                   clearInterval(countdown);
-                  window.close();
+                  // Don't auto-close to allow user to copy tokens if needed
+                  // window.close();
                 }
               }, 1000);
             </script>
@@ -310,7 +395,7 @@ export default async function handler(req, res) {
         return res.send(htmlResponse);
       }
     } catch (error) {
-      console.log(`OAuth code exchange failed:`, error.message);
+      log(`OAuth code exchange failed:`, error.message);
       
       // Provider-specific error messages
       let recommendedAction = "";
@@ -335,7 +420,7 @@ export default async function handler(req, res) {
       const wantsJson = req.headers.accept && req.headers.accept.includes('application/json');
       
       if (wantsJson) {
-        console.log('Returning JSON error response as requested');
+        log('Returning JSON error response as requested');
         return res.status(200).json({
           error: 'OAuth authentication failed',
           details: `Authentication for ${provider.name} failed`,
@@ -344,7 +429,7 @@ export default async function handler(req, res) {
           successfulConnect: false
         });
       } else {
-        console.log('Returning HTML error response');
+        log('Returning HTML error response');
         // Create an HTML error response
         const htmlErrorResponse = `
           <!DOCTYPE html>
@@ -357,6 +442,7 @@ export default async function handler(req, res) {
               p { margin: 20px 0; }
               .error { color: #f44336; font-weight: bold; }
               ul { text-align: left; display: inline-block; }
+              .debug { background: #f5f5f5; border: 1px solid #ddd; padding: 10px; margin: 20px 0; text-align: left; }
             </style>
           </head>
           <body>
@@ -366,6 +452,11 @@ export default async function handler(req, res) {
             <ul>
               ${requiredSettings.map(setting => `<li>${setting}</li>`).join('')}
             </ul>
+            <div class="debug">
+              <h3>Debug Information</h3>
+              <p>Request details: ${JSON.stringify(req.query)}</p>
+              <p>Error details: ${error.stack || error.message}</p>
+            </div>
             <p>Please close this window and try again.</p>
             <script>
               // Even though authentication failed, we need to tell n8n about it

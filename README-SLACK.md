@@ -52,6 +52,62 @@ Create a workflow in n8n with these nodes:
    - Queue URL: Your SQS queue URL
    - Receipt Handle: Obtained from first SQS node
 
+## API Endpoints
+
+This service provides the following API endpoints:
+
+### 1. Receive Slack Webhooks
+
+```
+POST /api/slack-webhook/[id]
+```
+
+This endpoint:
+- Receives webhooks from Slack
+- Handles the URL verification challenge
+- Queues the webhook payload in SQS
+- Always returns a 200 response to Slack
+
+### 2. Poll for Messages
+
+```
+GET /api/slack-queue
+```
+
+This endpoint retrieves messages from the Slack SQS queue.
+
+Query parameters:
+- `max`: Maximum number of messages to retrieve (1-10, default 5)
+- `visibility`: Visibility timeout in seconds (default 30)
+- `wait`: Wait time in seconds for long polling (default 0)
+- `attributes`: Set to 'true' to include message attributes
+- `delete`: Set to 'true' to delete messages after receiving
+- `stats`: Set to 'true' to include queue statistics
+
+Headers:
+- `x-api-key`: Authentication key (optional, if configured)
+
+Example:
+```
+GET https://altiverr-webhook-relay.vercel.app/api/slack-queue?max=5&delete=true
+```
+
+### 3. Delete Message
+
+```
+DELETE /api/slack-delete-message?receiptHandle=[receipt-handle]
+```
+or
+```
+POST /api/slack-delete-message
+{ "receiptHandle": "[receipt-handle]" }
+```
+
+This endpoint deletes a specific message from the queue after it has been processed.
+
+Headers:
+- `x-api-key`: Authentication key (optional, if configured)
+
 ## Testing
 
 To test the setup:
@@ -59,7 +115,10 @@ To test the setup:
 1. Ensure your local n8n is running
 2. Make sure your scheduled workflow is active
 3. In Slack, perform the action that should trigger the webhook
-4. Check your SQS queue for new messages
+4. Check your SQS queue for new messages by calling:
+   ```
+   GET https://altiverr-webhook-relay.vercel.app/api/slack-queue
+   ```
 5. Wait for the scheduled workflow to run and process the messages
 
 ## Environment Variables for Vercel
@@ -67,4 +126,5 @@ To test the setup:
 - `SLACK_SQS_QUEUE_URL`: The URL of your AWS SQS queue for Slack webhooks
 - `AWS_REGION`: The AWS region where your queue is located
 - `AWS_ACCESS_KEY_ID`: Your AWS access key
-- `AWS_SECRET_ACCESS_KEY`: Your AWS secret access key 
+- `AWS_SECRET_ACCESS_KEY`: Your AWS secret access key
+- `SLACK_QUEUE_API_KEY`: (Optional) API key for accessing the queue endpoints 

@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "outputDirectory": "public",
   "rewrites": [
     {
       "source": "/api/slack-webhook/:webhookId",
@@ -22,7 +23,5 @@
     "api/oauth2/callback/index.js": {
       "maxDuration": 10
     }
-  },
-  "buildCommand": "echo 'Build command executed'",
-  "cleanUrls": true
+  }
 } 

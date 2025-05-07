@@ -8,23 +8,18 @@
   ],
   "functions": {
     "api/slack-webhook.js": {
-      "memory": 1024,
       "maxDuration": 10
     },
     "api/queue.js": {
-      "memory": 1024,
       "maxDuration": 10
     },
     "api/delete-message.js": {
-      "memory": 1024,
       "maxDuration": 10
     },
     "api/webhook.js": {
-      "memory": 1024,
       "maxDuration": 10
     },
-    "api/oauth2/rest/oauth2-credential/callback.js": {
-      "memory": 1024,
+    "api/oauth2/callback/index.js": {
       "maxDuration": 10
     }
   },

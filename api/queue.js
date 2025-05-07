@@ -1,4 +1,4 @@
-// Queue management API for SQS
+// API endpoint to retrieve messages from SQS queue
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 
@@ -30,8 +30,7 @@ function validateApiKey(req) {
   }
 }
 
-// API handler
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -53,64 +52,94 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // Get messages with pagination support
-    const max = Math.min(parseInt(req.query.max) || 10, 10);
-    const visibilityTimeout = parseInt(req.query.visibility) || 30;
-    const waitTime = parseInt(req.query.wait) || 0;
-    const includeAttributes = req.query.attributes === 'true';
-    const includeStats = req.query.stats === 'true';
-    
-    // Prepare SQS parameters
+    // Get query parameters
+    const maxMessages = Math.min(parseInt(req.query.max || '100'), 10); // Max 10 messages
+    const visibilityTimeout = parseInt(req.query.visibility || '10'); // Default 30 seconds
+    const waitTimeSeconds = parseInt(req.query.wait || '0'); // Default 0 seconds (short polling)
+    const includeAttributes = req.query.attributes === 'true'; // Include all attributes
+    const allStats = req.query.stats === 'true'; // Include queue stats
+
+    // Set up params for receiving messages
     const params = {
       QueueUrl: QUEUE_URL,
-      MaxNumberOfMessages: max,
+      MaxNumberOfMessages: maxMessages,
       VisibilityTimeout: visibilityTimeout,
-      WaitTimeSeconds: waitTime,
-      AttributeNames: includeAttributes ? ['All'] : []
+      WaitTimeSeconds: waitTimeSeconds
     };
-    
-    // Receive messages from SQS
+
+    // If attributes are requested, include them
+    if (includeAttributes) {
+      params.AttributeNames = ['All'];
+      params.MessageAttributeNames = ['All'];
+    }
+
+    // If stats are requested, get the queue attributes first
+    let queueStats = {};
+    if (allStats) {
+      try {
+        const attributeParams = {
+          QueueUrl: QUEUE_URL,
+          AttributeNames: ['All']
+        };
+        
+        const attributeData = await sqs.getQueueAttributes(attributeParams).promise();
+        queueStats = attributeData.Attributes || {};
+      } catch (err) {
+        console.error('Error getting queue attributes:', err);
+      }
+    }
+
+    // Get messages from SQS
+    console.log('Retrieving messages from SQS queue...');
     const data = await sqs.receiveMessage(params).promise();
     
-    // Return empty array if no messages
-    const messages = data.Messages || [];
-    
-    // Get queue stats if requested
-    let stats = null;
-    if (includeStats) {
-      const statsParams = {
-        QueueUrl: QUEUE_URL,
-        AttributeNames: ['All']
+    // Check if messages were found
+    if (!data.Messages || data.Messages.length === 0) {
+      return res.status(200).json({ 
+        messages: [],
+        count: 0,
+        stats: queueStats
+      });
+    }
+
+    // Process messages
+    const messages = data.Messages.map(message => {
+      let body;
+      
+      try {
+        // Parse the message body (which is a JSON string)
+        body = JSON.parse(message.Body);
+      } catch (err) {
+        // If we can't parse the message body, use it as is
+        body = message.Body;
+      }
+      
+      // Basic message properties
+      const result = {
+        id: message.MessageId,
+        receiptHandle: message.ReceiptHandle,
+        body: body,
+        md5OfBody: message.MD5OfBody
       };
       
-      const queueData = await sqs.getQueueAttributes(statsParams).promise();
-      stats = queueData.Attributes;
-    }
-    
-    // Prepare response
-    const response = {
-      totalMessages: messages.length,
-      messages: messages.map(message => {
-        const body = JSON.parse(message.Body);
-        return {
-          messageId: message.MessageId,
-          receiptHandle: message.ReceiptHandle,
-          body: body,
-          attributes: includeAttributes ? message.Attributes : undefined
-        };
-      })
-    };
-    
-    // Add stats if requested
-    if (stats) {
-      response.stats = stats;
-    }
-    
-    return res.status(200).json(response);
+      // Add attributes if requested
+      if (includeAttributes) {
+        result.attributes = message.Attributes || {};
+        result.messageAttributes = message.MessageAttributes || {};
+      }
+      
+      return result;
+    });
+
+    return res.status(200).json({
+      messages: messages,
+      count: messages.length,
+      stats: queueStats
+    });
   } catch (error) {
-    console.error('Queue error:', error);
-    return res.status(500).json({ 
-      error: 'Failed to retrieve messages',
+    console.error('Error retrieving messages from SQS:', error);
+    return res.status(500).json({
+      error: 'Failed to retrieve messages from queue',
       details: error.message
     });
   }

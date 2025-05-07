@@ -1,7 +1,7 @@
 {
   "name": "altiverr-webhook-relay",
   "version": "1.0.0",
-  "description": "Webhook relay service for Slack and n8n integration",
+  "description": "",
   "homepage": "https://github.com/mzienert/altiverr-webhook-relay#readme",
   "bugs": {
     "url": "https://github.com/mzienert/altiverr-webhook-relay/issues"
@@ -15,16 +15,12 @@
   "type": "commonjs",
   "main": "api/webhook.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "echo \"No build step required\" && exit 0"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "aws-sdk": "^2.1370.0",
-    "axios": "^1.6.2",
-    "dotenv": "^16.3.1",
+    "axios": "^1.8.4",
+    "dotenv": "^16.5.0",
     "jsonwebtoken": "^9.0.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }

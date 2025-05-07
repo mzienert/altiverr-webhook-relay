@@ -30,12 +30,22 @@ export default async function handler(req, res) {
       return res.status(200).json({ challenge: req.body.challenge });
     }
 
-    // Log the incoming webhook data
+    // Log the incoming webhook data and environment details (for debugging)
     console.log(`Received Slack webhook for ID ${id}:`, JSON.stringify(req.body));
+    console.log(`AWS Region: ${process.env.AWS_REGION || 'not set'}`);
+    console.log(`Queue URL: ${QUEUE_URL || 'not set'}`);
+    console.log(`AWS Access Key ID is set: ${process.env.AWS_ACCESS_KEY_ID ? 'yes' : 'no'}`);
+    console.log(`AWS Secret Access Key is set: ${process.env.AWS_SECRET_ACCESS_KEY ? 'yes' : 'no'}`);
     
     // IMPORTANT: Send success response immediately to Slack
     // This prevents Slack from retrying if queue operations fail
     res.status(200).json({ success: true });
+    
+    // Check if SQS is configured
+    if (!QUEUE_URL) {
+      console.error('SLACK_SQS_QUEUE_URL is not set - cannot queue message');
+      return;
+    }
     
     // Generate unique deduplication ID
     const deduplicationId = crypto
@@ -60,27 +70,44 @@ export default async function handler(req, res) {
       timestamp: new Date().toISOString()
     });
 
+    // Check if this is a FIFO queue (URL ends with .fifo)
+    const isFifoQueue = QUEUE_URL.toLowerCase().endsWith('.fifo');
+    
     // Prepare the SQS message parameters
     const messageParams = {
       QueueUrl: QUEUE_URL,
-      MessageBody: messageBody,
-      MessageGroupId: `slack-${id}`, // For FIFO queues
-      MessageDeduplicationId: deduplicationId // For FIFO queues
+      MessageBody: messageBody
     };
+    
+    // Add FIFO-specific attributes if needed
+    if (isFifoQueue) {
+      messageParams.MessageGroupId = `slack-${id}`; // For FIFO queues
+      messageParams.MessageDeduplicationId = deduplicationId; // For FIFO queues
+      console.log('Using FIFO queue parameters');
+    }
 
     try {
+      console.log('Attempting to send message to SQS...');
       // Send the message to SQS
       const result = await sqs.sendMessage(messageParams).promise();
-      console.log(`Queued Slack webhook for ID ${id}, message ID: ${result.MessageId}`);
+      console.log(`Successfully queued Slack webhook for ID ${id}, message ID: ${result.MessageId}`);
     } catch (queueError) {
-      // Log the error but don't fail - we've already sent success to Slack
-      console.error('Failed to queue Slack webhook:', queueError.message);
+      // Log the detailed error but don't fail - we've already sent success to Slack
+      console.error('Failed to queue Slack webhook:', {
+        message: queueError.message,
+        code: queueError.code,
+        statusCode: queueError.statusCode,
+        requestId: queueError.requestId,
+        time: queueError.time,
+        stack: queueError.stack
+      });
     }
     
   } catch (error) {
     console.error('Slack webhook error:', {
       message: error.message,
-      code: error.code
+      code: error.code,
+      stack: error.stack
     });
     
     // We still return 200 to Slack to prevent retries

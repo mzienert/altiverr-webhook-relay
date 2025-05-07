@@ -5,6 +5,9 @@
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 
+// Initialize SQS with detailed debugging
+AWS.config.logger = console;
+
 // Initialize SQS with more aggressive timeouts for Vercel
 const sqs = new AWS.SQS({
   region: process.env.AWS_REGION,
@@ -91,36 +94,74 @@ export default async function handler(req, res) {
       bodyLength: messageBody.length
     });
 
-    // Send with Promise.race to implement our own timeout
+    // Send with improved error handling
     try {
+      console.log(`[${Date.now() - startTime}ms] SQS Request start`);
+      
+      // Create timer for detailed debugging
+      const sqsTimer = setTimeout(() => {
+        console.log(`[${Date.now() - startTime}ms] SQS operation still running (hasn't completed or errored yet)`);
+      }, 1000);
+      
+      // Send the message
       const sendPromise = sqs.sendMessage(messageParams).promise();
       
       // Create a timeout promise
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('SQS operation timed out')), 2500)
+        setTimeout(() => reject(new Error('SQS operation timed out after 2.5s')), 2500)
       );
       
       // Race the SQS operation against the timeout
       const result = await Promise.race([sendPromise, timeoutPromise]);
       
+      // Clear the timer
+      clearTimeout(sqsTimer);
+      
       console.log(`[${Date.now() - startTime}ms] Successfully queued message:`, {
         messageId: result.MessageId,
-        sequenceNumber: result.SequenceNumber
+        sequenceNumber: result.SequenceNumber,
+        awsRequestId: result.$response?.requestId
       });
     } catch (queueError) {
-      console.error(`[${Date.now() - startTime}ms] Failed to queue message:`, {
-        error: queueError.message,
+      // Log with comprehensive error details
+      const errorDetails = {
+        message: queueError.message,
         code: queueError.code,
-        statusCode: queueError.statusCode
-      });
+        name: queueError.name,
+        statusCode: queueError.statusCode,
+        time: queueError.time,
+        retryable: queueError.retryable,
+        aborted: queueError.aborted,
+        requestId: queueError.requestId,
+        region: queueError.region,
+        hostname: queueError.hostname,
+        response: queueError.$response ? {
+          requestId: queueError.$response.requestId,
+          statusCode: queueError.$response.statusCode,
+          retryable: queueError.$response.retryable,
+          error: queueError.$response.error
+        } : undefined
+      };
+      
+      console.error(`[${Date.now() - startTime}ms] Failed to queue message:`, errorDetails);
+      
+      // Try to log stack trace separately for better debugging
+      if (queueError.stack) {
+        console.error(`[${Date.now() - startTime}ms] Error stack trace:`, queueError.stack);
+      }
     }
     
     console.log(`[${Date.now() - startTime}ms] Webhook processing completed`);
   } catch (error) {
-    console.error(`[${Date.now() - startTime}ms] Webhook error:`, {
+    // Log comprehensive error details
+    const errorObj = {
       message: error.message,
-      code: error.code
-    });
+      name: error.name,
+      code: error.code,
+      stack: error.stack
+    };
+    
+    console.error(`[${Date.now() - startTime}ms] Webhook error:`, errorObj);
     
     // Ensure we send a response if we haven't already
     if (!res.writableEnded) {

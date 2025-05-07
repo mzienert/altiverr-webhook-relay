@@ -5,5 +5,29 @@
       "src": "/api/slack-webhook/(.*)",
       "dest": "/api/slack-webhook.js"
     }
-  ]
+  ],
+  "functions": {
+    "api/slack-webhook.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    },
+    "api/queue.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    },
+    "api/delete-message.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    },
+    "api/webhook.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    },
+    "api/oauth2/rest/oauth2-credential/callback.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  },
+  "buildCommand": "echo 'Build command executed'",
+  "cleanUrls": true
 } 

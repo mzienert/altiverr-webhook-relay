@@ -4,7 +4,7 @@
 source .env
 
 # Default webhook ID if not provided
-WEBHOOK_ID=${1:-"1910dd74-46e5-42f1-84b6-29be97f42d26"}
+WEBHOOK_ID=${1:-"f939a053-cc02-4c1e-9334-b83686933ff1"}
 
 # Get the latest deployment URL
 LATEST_URL=$(vercel ls --production -j | jq -r '.deployments[0].url')

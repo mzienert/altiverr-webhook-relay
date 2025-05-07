@@ -1,11 +1,10 @@
-// Minimal Slack webhook handler - simplified to mirror successful Calendly implementation
+// Simplified Slack webhook handler - matching Calendly implementation
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 
-// Initialize SQS with bare minimum config
+// Initialize SQS with the same config as the Calendly implementation
 const sqs = new AWS.SQS({
-  region: process.env.AWS_REGION,
-  maxRetries: 0
+  region: process.env.AWS_REGION
 });
 
 // Environment variables
@@ -20,46 +19,52 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Return success immediately for URL verification challenges
+  // Handle Slack URL verification challenge
   if (req.body.type === 'url_verification') {
     return res.status(200).json({ challenge: req.body.challenge });
   }
 
-  // Send success response to Slack IMMEDIATELY
-  res.status(200).json({ success: true });
-  
   try {
-    // Generate unique deduplication ID
+    console.log(`Received Slack webhook for ID ${id}`);
+    
+    // Generate unique deduplication ID (same approach as Calendly)
     const deduplicationId = crypto
       .createHash('sha256')
       .update(`${Date.now()}-${Math.random()}`)
       .digest('hex');
     
-    // Create message object with only essential fields
-    const message = {
+    // Create message payload (simplified)
+    const messageBody = JSON.stringify({
       source: 'slack',
       webhookId: id,
       event: req.body.event,
-      eventType: req.body.type,
+      type: req.body.type,
       timestamp: new Date().toISOString()
-    };
-    
-    // Stringify the message body
-    const messageBody = JSON.stringify(message);
+    });
 
-    // Create parameters with Object.create(null) - same as Calendly implementation
+    // Create parameters using Object.create(null) exactly like Calendly
     const messageParams = Object.create(null);
     messageParams.QueueUrl = QUEUE_URL;
     messageParams.MessageBody = messageBody;
-    messageParams.MessageGroupId = "slack-events"; // Same style as Calendly's "calendly-events"
+    messageParams.MessageGroupId = "slack-events";  // Static like Calendly
     messageParams.MessageDeduplicationId = deduplicationId;
 
-    console.log('Sending Slack event to SQS queue...');
+    console.log('Sending Slack event to queue...');
     
-    // Send the message to SQS
-    await sqs.sendMessage(messageParams).promise();
-    console.log('Successfully sent Slack event to SQS');
+    // Send message to SQS
+    const result = await sqs.sendMessage(messageParams).promise();
+    
+    console.log('Successfully sent to queue:', result.MessageId);
+    
+    // Return success response to Slack
+    return res.status(200).json({ success: true, messageId: result.MessageId });
   } catch (error) {
-    console.error('Failed to queue Slack event:', error.message);
+    console.error('Error processing webhook:', error.message);
+    
+    // Still return success to Slack to prevent retries
+    return res.status(200).json({ 
+      success: false, 
+      error: 'Failed to process webhook'
+    });
   }
 } 

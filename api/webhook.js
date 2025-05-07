@@ -1,4 +1,4 @@
-// Minimal webhook handler for Calendly to SQS
+// Webhook handler for Calendly to SQS
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 
@@ -44,7 +44,7 @@ function verifySignature(payload, signature, timestamp) {
   }
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // Only allow POST method
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });

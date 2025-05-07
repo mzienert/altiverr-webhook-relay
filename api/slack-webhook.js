@@ -1,11 +1,11 @@
 // Webhook relay handler for Slack to n8n
-const axios = require('axios');
+const axios = require('axios').default;
 const crypto = require('crypto');
 
 // Environment variables
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/';
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     console.log('Received request to Slack webhook relay');
 

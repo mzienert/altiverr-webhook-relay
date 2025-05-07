@@ -1,20 +1,48 @@
-// Webhook relay handler for Slack to n8n with dynamic path parameters
+// Catch-all handler for any Slack webhook URL
 const axios = require('axios');
 const crypto = require('crypto');
 
 // Environment variables
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/';
 
+// Handle all requests to /api/slack-webhook/*
 export default async function handler(req, res) {
-  // Only allow POST method
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
   try {
-    console.log('Received Slack webhook payload');
+    console.log(`Received Slack webhook request to path: ${req.url}`);
     
-    // Get the raw body from the request
+    // Extract the webhook ID from the URL
+    // The slug parameter will be an array of path segments after /api/slack-webhook/catch/
+    const path = req.query.slug || [];
+    
+    // Use the first path segment as the webhook ID
+    // If we're using /api/slack-webhook/WEBHOOK_ID, the first segment will be the ID
+    const webhookId = path[0];
+    
+    // Check if we have a valid webhook ID
+    if (!webhookId) {
+      console.log('No webhook ID provided');
+      return res.status(400).json({
+        error: 'Missing webhook ID',
+        message: 'Please include a webhook ID in the URL'
+      });
+    }
+    
+    console.log(`Extracted webhook ID: ${webhookId}`);
+    
+    // For GET requests - provide info and respond to challenges
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        message: 'Slack webhook endpoint ready',
+        webhookId: webhookId
+      });
+    }
+    
+    // Only allow POST for webhook events
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+    
+    // Get the raw body and handle Slack URL verification challenge
     const payload = req.body;
     
     // Handle Slack URL verification challenge
@@ -29,27 +57,15 @@ export default async function handler(req, res) {
       .update(`${Date.now()}-${Math.random()}`)
       .digest('hex')
       .substring(0, 12);
-      
-    console.log(`[${requestId}] Processing Slack webhook`);
     
-    // Get the webhook ID from the URL path parameter
-    const webhookId = req.query.webhookId;
-    
-    if (!webhookId) {
-      console.error(`[${requestId}] No webhook ID found in URL`);
-      return res.status(400).json({ error: 'Webhook ID is required' });
-    }
-    
-    console.log(`[${requestId}] Webhook ID: ${webhookId}`);
-    
-    // Construct the target URL - ensure trailing slash is handled correctly
+    // Construct the target URL for n8n
     let targetUrl = N8N_WEBHOOK_URL;
     if (!targetUrl.endsWith('/')) {
       targetUrl += '/';
     }
     targetUrl += webhookId;
     
-    // Check if we need to add "/webhook" suffix based on n8n's URL format
+    // Check if we need to add "/webhook" suffix
     if (!targetUrl.endsWith('/webhook')) {
       targetUrl += '/webhook';
     }

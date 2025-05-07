@@ -5,16 +5,20 @@
 const AWS = require('aws-sdk');
 const crypto = require('crypto');
 
-// Initialize SQS
+// Initialize SQS with timeout settings
 const sqs = new AWS.SQS({
-  region: process.env.AWS_REGION
+  region: process.env.AWS_REGION,
+  httpOptions: {
+    timeout: 5000, // 5 second timeout for SQS operations
+    connectTimeout: 1000 // 1 second to establish connection
+  }
 });
 
 // Environment variables
 const QUEUE_URL = process.env.SLACK_SQS_QUEUE_URL;
 
 export default async function handler(req, res) {
-  // Get the webhook ID from the URL
+  const startTime = Date.now();
   const { id } = req.query;
   
   // Only allow POST method
@@ -23,42 +27,44 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Handle Slack URL verification challenge
-    // https://api.slack.com/events/url_verification
+    console.log(`[${Date.now() - startTime}ms] Processing webhook for ID ${id}`);
+
+    // Handle Slack URL verification challenge first
     if (req.body.type === 'url_verification') {
       console.log('Handling Slack URL verification challenge');
       return res.status(200).json({ challenge: req.body.challenge });
     }
 
-    // Log the incoming webhook data and environment details (for debugging)
-    console.log(`Received Slack webhook for ID ${id}:`, JSON.stringify(req.body));
-    console.log(`AWS Region: ${process.env.AWS_REGION || 'not set'}`);
-    console.log(`Queue URL: ${QUEUE_URL || 'not set'}`);
-    console.log(`AWS Access Key ID is set: ${process.env.AWS_ACCESS_KEY_ID ? 'yes' : 'no'}`);
-    console.log(`AWS Secret Access Key is set: ${process.env.AWS_SECRET_ACCESS_KEY ? 'yes' : 'no'}`);
-    
-    // IMPORTANT: Send success response immediately to Slack
-    // This prevents Slack from retrying if queue operations fail
-    res.status(200).json({ success: true });
-    
-    // Check if SQS is configured
+    // Check SQS configuration immediately
     if (!QUEUE_URL) {
       console.error('SLACK_SQS_QUEUE_URL is not set - cannot queue message');
-      return;
+      return res.status(200).json({ 
+        success: false, 
+        error: 'Queue not configured'
+      });
     }
-    
-    // Generate unique deduplication ID
+
+    // Log the incoming webhook data and environment details
+    console.log(`[${Date.now() - startTime}ms] Received Slack webhook:`, {
+      id,
+      type: req.body.type,
+      eventType: req.body.event?.type,
+      region: process.env.AWS_REGION || 'not set',
+      queueUrl: QUEUE_URL,
+      hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+      hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY
+    });
+
+    // Prepare SQS message before sending response
     const deduplicationId = crypto
       .createHash('sha256')
       .update(`${Date.now()}-${Math.random()}-${id}`)
       .digest('hex');
     
-    // Create the message payload
     const messageBody = JSON.stringify({
       source: 'slack',
       webhookId: id,
       headers: {
-        // Include relevant headers
         ...(req.headers['x-slack-signature'] && {
           'x-slack-signature': req.headers['x-slack-signature']
         }),
@@ -70,48 +76,46 @@ export default async function handler(req, res) {
       timestamp: new Date().toISOString()
     });
 
-    // Check if this is a FIFO queue (URL ends with .fifo)
-    const isFifoQueue = QUEUE_URL.toLowerCase().endsWith('.fifo');
-    
-    // Prepare the SQS message parameters
     const messageParams = {
       QueueUrl: QUEUE_URL,
-      MessageBody: messageBody
+      MessageBody: messageBody,
+      MessageGroupId: `slack-${id}`,
+      MessageDeduplicationId: deduplicationId
     };
+
+    // Send response to Slack before SQS operation
+    res.status(200).json({ success: true });
     
-    // Add FIFO-specific attributes if needed
-    if (isFifoQueue) {
-      messageParams.MessageGroupId = `slack-${id}`; // For FIFO queues
-      messageParams.MessageDeduplicationId = deduplicationId; // For FIFO queues
-      console.log('Using FIFO queue parameters');
-    }
+    console.log(`[${Date.now() - startTime}ms] Sending message to SQS:`, {
+      messageGroupId: messageParams.MessageGroupId,
+      deduplicationId: messageParams.MessageDeduplicationId,
+      bodyLength: messageBody.length
+    });
 
     try {
-      console.log('Attempting to send message to SQS...');
-      // Send the message to SQS
       const result = await sqs.sendMessage(messageParams).promise();
-      console.log(`Successfully queued Slack webhook for ID ${id}, message ID: ${result.MessageId}`);
+      console.log(`[${Date.now() - startTime}ms] Successfully queued message:`, {
+        messageId: result.MessageId,
+        sequenceNumber: result.SequenceNumber
+      });
     } catch (queueError) {
-      // Log the detailed error but don't fail - we've already sent success to Slack
-      console.error('Failed to queue Slack webhook:', {
-        message: queueError.message,
+      console.error(`[${Date.now() - startTime}ms] Failed to queue message:`, {
+        error: queueError.message,
         code: queueError.code,
         statusCode: queueError.statusCode,
-        requestId: queueError.requestId,
-        time: queueError.time,
-        stack: queueError.stack
+        requestId: queueError.requestId
       });
+      // Don't throw - we've already sent success to Slack
     }
     
+    console.log(`[${Date.now() - startTime}ms] Webhook processing completed`);
   } catch (error) {
-    console.error('Slack webhook error:', {
+    console.error(`[${Date.now() - startTime}ms] Webhook error:`, {
       message: error.message,
-      code: error.code,
-      stack: error.stack
+      code: error.code
     });
     
-    // We still return 200 to Slack to prevent retries
-    // Even though there was an error processing
+    // Still return 200 to Slack
     return res.status(200).json({ 
       received: true,
       error: 'Failed to process webhook'

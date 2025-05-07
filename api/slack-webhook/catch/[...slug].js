@@ -18,6 +18,7 @@ export default async function handler(req, res) {
     // If we're using /api/slack-webhook/WEBHOOK_ID, the first segment will be the ID
     const webhookId = path[0];
     
+    
     // Check if we have a valid webhook ID
     if (!webhookId) {
       console.log('No webhook ID provided');

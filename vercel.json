@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/slack-webhook/(.*)",
-      "dest": "/api/slack-webhook.js"
+      "source": "/api/slack-webhook/:webhookId",
+      "destination": "/api/slack-webhook.js"
     }
   ],
   "functions": {

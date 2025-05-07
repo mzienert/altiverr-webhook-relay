@@ -81,12 +81,13 @@ export default async function handler(req, res) {
       timestamp: new Date().toISOString()
     });
 
-    const messageParams = {
-      QueueUrl: QUEUE_URL,
-      MessageBody: messageBody,
-      MessageGroupId: `slack-${id}`,
-      MessageDeduplicationId: deduplicationId
-    };
+    // Create parameters using Object.create(null) to avoid prototype issues
+    // This matches the working Calendly webhook implementation
+    const messageParams = Object.create(null);
+    messageParams.QueueUrl = QUEUE_URL;
+    messageParams.MessageBody = messageBody;
+    messageParams.MessageGroupId = `slack-${id}`;
+    messageParams.MessageDeduplicationId = deduplicationId;
     
     console.log(`[${Date.now() - startTime}ms] Sending message to SQS:`, {
       messageGroupId: messageParams.MessageGroupId,

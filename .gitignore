@@ -137,3 +137,5 @@ dist
 .vercel
 
 /JWT
+
+vercel-credentials.txt

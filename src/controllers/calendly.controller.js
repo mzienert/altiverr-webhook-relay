@@ -1,5 +1,6 @@
-import logger from '../config/logger.js';
+import logger from '../utils/logger.js';
 import calendlyService from '../services/calendly.service.js';
+import responder from '../utils/responder.js';
 
 /**
  * Handle incoming Calendly webhook
@@ -18,11 +19,7 @@ export async function handleCalendlyWebhook(req, res, next) {
     const result = await calendlyService.processCalendlyWebhook(req.body);
     
     // Return success response with generated ID
-    res.status(200).json({
-      success: true,
-      message: 'Webhook received and processed',
-      id: result.id
-    });
+    responder.success(res, 200, { id: result.id }, 'Webhook received and processed');
   } catch (error) {
     logger.error('Error processing Calendly webhook', { error: error.message });
     next(error);

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import env from '../config/env.js';
-import logger from '../config/logger.js';
+import logger from '../utils/logger.js';
 
 /**
  * Factory function to create a middleware for verifying webhook signatures

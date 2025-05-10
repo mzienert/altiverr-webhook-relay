@@ -1,6 +1,4 @@
 import axios from 'axios';
-import crypto from 'crypto';
-import AWS from 'aws-sdk';
 import env from '../../config/env.js';
 import logger from '../utils/logger.js';
 import { forwardToN8n } from '../services/n8n.service.js';

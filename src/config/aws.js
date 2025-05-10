@@ -1,6 +1,6 @@
 import AWS from 'aws-sdk';
 import env from './env.js';
-import logger from './logger.js';
+import logger from '../utils/logger.js';
 
 // Configure AWS SDK
 AWS.config.update({

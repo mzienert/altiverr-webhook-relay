@@ -3,7 +3,7 @@ import routes from './routes/index.js';
 import webhookRoutes from './routes/webhook.routes.js';
 import { notFoundHandler, errorHandler } from './middlewares/error.js';
 import env from './config/env.js';
-import logger from './config/logger.js';
+import logger from './utils/logger.js';
 import { validateSnsConfig } from './config/aws.js';
 
 // Initialize Express app

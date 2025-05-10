@@ -1,5 +1,5 @@
 import express from 'express';
-import env from '../config/env.js';
+import env from '../../config/env.js';
 import { getWebhookUrl } from '../utils/webhookUrl.js';
 import responder from '../utils/responder.js';
 

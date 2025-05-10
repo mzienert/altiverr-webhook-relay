@@ -1,5 +1,6 @@
-import logger from '../config/logger.js';
+import logger from '../utils/logger.js';
 import env from '../config/env.js';
+import responder from '../utils/responder.js';
 
 /**
  * Not found error handler - for non-existent routes
@@ -34,13 +35,10 @@ export function errorHandler(err, req, res, next) {
     });
   }
   
-  // Send error response
-  res.status(statusCode).json({
-    error: true,
-    message: err.message,
-    status: statusCode,
-    ...(env.api.env === 'development' && statusCode === 500 ? { stack: err.stack } : {})
-  });
+  // Send error response using responder
+  const details = env.api.env === 'development' && statusCode === 500 ? { stack: err.stack } : {};
+  
+  return responder.error(res, statusCode, err.message, details);
 }
 
 export default {

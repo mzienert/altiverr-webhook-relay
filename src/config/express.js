@@ -4,8 +4,9 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import xssClean from 'xss-clean';
 
-import logger from './logger.js';
+import logger from '../utils/logger.js';
 import env from './env.js';
+import responder from '../utils/responder.js';
 
 // Create Express app
 function createApp() {
@@ -31,11 +32,10 @@ function createApp() {
   
   // Health check endpoint
   app.get('/health', (req, res) => {
-    res.status(200).json({
+    responder.success(res, 200, {
       status: 'ok',
-      message: 'Webhook relay service is running',
       timestamp: new Date().toISOString()
-    });
+    }, 'Webhook relay service is running');
   });
   
   return app;

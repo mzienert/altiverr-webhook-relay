@@ -3,6 +3,7 @@ import axios from 'axios';
 import env from '../../config/env.js';
 import logger from '../utils/logger.js';
 import { getWebhookUrl } from '../utils/webhookUrl.js';
+import responder from '../utils/responder.js';
 
 // Track the proxy uptime
 const startTime = new Date();
@@ -80,16 +81,11 @@ export async function healthCheck(req, res) {
       };
     }
     
-    return res.status(200).json(health);
+    return responder.success(res, 200, health);
   } catch (error) {
     logger.error('Health check failed', { error: error.message });
     
-    return res.status(500).json({
-      status: 'error',
-      error: error.message,
-      service: 'webhook-proxy',
-      timestamp: new Date().toISOString()
-    });
+    return responder.error(res, 500, 'Health check failed', { error: error.message });
   }
 }
 
@@ -104,18 +100,14 @@ export async function readinessCheck(req, res) {
     // For now, we just check if we're up, but this could be expanded
     // to check connections to SNS, n8n, etc.
     
-    return res.status(200).json({
+    return responder.success(res, 200, {
       status: 'ready',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     logger.error('Readiness check failed', { error: error.message });
     
-    return res.status(503).json({
-      status: 'not_ready',
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
+    return responder.error(res, 503, 'Service not ready', { error: error.message });
   }
 }
 

@@ -1,6 +1,6 @@
 import { sns } from '../config/aws.js';
 import env from '../config/env.js';
-import logger from '../config/logger.js';
+import logger from '../utils/logger.js';
 
 /**
  * Publish a message to the SNS topic

@@ -15,7 +15,7 @@ const env = {
     snsTopicArn: process.env.SNS_TOPIC_ARN
   },
   server: {
-    // ⚠️ WARNING: The proxy MUST run on port 3333 to match the Cloudflare tunnel configuration
+    // WARNING: The proxy MUST run on port 3333 to match the Cloudflare tunnel configuration
     // DO NOT CHANGE THIS PORT unless you also update the Cloudflare tunnel configuration
     port: parseInt(process.env.PORT || '3333', 10),
     host: process.env.HOST || '0.0.0.0',

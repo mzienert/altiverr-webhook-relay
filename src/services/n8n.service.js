@@ -1,6 +1,6 @@
 import axios from 'axios';
 import env from '../../config/env.js';
-import logger from '../../config/logger.js';
+import logger from '../utils/logger.js';
 import { getWebhookUrl } from '../utils/webhookUrl.js';
 
 /**

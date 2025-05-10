@@ -2,7 +2,7 @@ import express from 'express';
 import calendlyController from '../controllers/calendly.controller.js';
 import { createWebhookAuthMiddleware } from '../middlewares/webhookAuth.js';
 import { verifyCalendlySignature } from '../services/calendly.service.js';
-import logger from '../config/logger.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 

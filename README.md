@@ -204,3 +204,28 @@ The following environment variables are required:
 2. Add the redirect URL to your app configuration
 3. Add required scopes to your app
 4. Set the required environment variables
+
+## Webhook Proxy Development
+
+The webhook relay system includes a local proxy component that runs on your MacBook to forward messages from AWS SNS to n8n. During development, you can run this proxy in development mode to automatically reload when files change.
+
+### Running the Proxy in Development Mode
+
+1. First, unload the service if it's running:
+```bash
+launchctl unload ~/Library/LaunchAgents/com.altiverr.webhook-proxy.plist
+```
+
+2. Navigate to the proxy directory and run in development mode:
+```bash
+cd proxy && npm run dev
+```
+
+3. The proxy will now automatically restart whenever you make changes to any files in the proxy directory.
+
+4. When you're done developing, you can reload the service for production mode:
+```bash
+launchctl load ~/Library/LaunchAgents/com.altiverr.webhook-proxy.plist
+```
+
+For more detailed instructions, see the proxy README in the `proxy/` directory.

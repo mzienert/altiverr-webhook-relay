@@ -1,0 +1,71 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook",
+        "options": {}
+      },
+      "id": "c7d4ec54-6eaa-4e73-9ad0-4df785d2c613",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Add timestamp\nconst timestamp = new Date().toISOString();\n\n// Process the webhook data\nconst input = $input.item.json;\nconst webhookId = input.id || 'unknown';\nconst source = input.source || 'unknown';\nconst eventType = input.event_type || 'unknown';\n\n// Return processed data\nreturn {\n  processed: true,\n  timestamp,\n  webhookId,\n  source,\n  eventType,\n  rawData: input\n};"
+      },
+      "id": "e7b1a9f5-6c1c-4b6c-a5be-81cf2cbc17be",
+      "name": "Process Webhook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "f3a7c4ab-cca8-4c96-aa9e-42f6b1c53a9a",
+      "name": "No Operation, do nothing",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        730,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Process Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Webhook": {
+      "main": [
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "name": "Webhook Relay Test",
+  "id": "1",
+  "active": true
+} 

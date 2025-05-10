@@ -1,5 +1,6 @@
 import createApp from './config/express.js';
 import routes from './routes/index.js';
+import webhookRoutes from './routes/webhook.routes.js';
 import { notFoundHandler, errorHandler } from './middlewares/error.js';
 import env from './config/env.js';
 import logger from './config/logger.js';
@@ -8,8 +9,24 @@ import { validateSnsConfig } from './config/aws.js';
 // Initialize Express app
 const app = createApp();
 
+// Add health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'webhook-relay-api',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    env: env.api.env
+  });
+});
+
 // Register API routes
 app.use('/api', routes);
+
+// Direct webhook routes - for compatibility with various clients
+app.use('/api/webhook', webhookRoutes);
+app.use('/webhook', webhookRoutes);  // Handle /webhook directly for clients that don't use /api prefix
 
 // Register error handlers
 app.use(notFoundHandler);
@@ -35,6 +52,8 @@ const startServer = async () => {
       // Log webhook URLs
       logger.info('Webhook endpoints:');
       logger.info(`- Calendly: http://localhost:${port}/api/webhook/calendly`);
+      logger.info(`- Generic: http://localhost:${port}/api/webhook`);
+      logger.info(`- Direct: http://localhost:${port}/webhook`);
     });
   } catch (error) {
     logger.error('Failed to start server', { error: error.message, stack: error.stack });

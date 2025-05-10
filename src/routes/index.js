@@ -13,6 +13,13 @@ router.get('/', (req, res) => {
   });
 });
 
+// Add compatibility route for Calendly webhooks coming to /webhook
+router.post('/webhook', (req, res, next) => {
+  console.log('Received webhook at /webhook, forwarding to /webhook/calendly');
+  req.url = '/webhook/calendly';
+  next();
+});
+
 // Register route modules
 router.use('/webhook', webhookRoutes);
 

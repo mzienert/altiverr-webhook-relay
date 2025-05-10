@@ -6,8 +6,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables
-dotenv.config({ path: path.join(__dirname, '../../.env') });
+// Load environment variables from .env file only in development
+// Vercel automatically provides environment variables in production
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.join(__dirname, '../../.env') });
+}
 
 const env = {
   aws: {
@@ -28,5 +31,18 @@ const env = {
     webhookSecret: process.env.CALENDLY_WEBHOOK_SECRET
   }
 };
+
+// Debug environment (only in development)
+if (process.env.NODE_ENV !== 'production') {
+  console.log('Environment configuration loaded:', {
+    region: env.aws.region,
+    port: env.api.port,
+    env: env.api.env,
+    logLevel: env.api.logLevel,
+    topicArn: env.aws.snsTopicArn ? '✓' : '✗',
+    accessKeyId: env.aws.accessKeyId ? '✓' : '✗',
+    secretAccessKey: env.aws.secretAccessKey ? '✓' : '✗',
+  });
+}
 
 export default env; 

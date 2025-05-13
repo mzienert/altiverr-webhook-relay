@@ -229,3 +229,110 @@ launchctl load ~/Library/LaunchAgents/com.altiverr.webhook-proxy.plist
 ```
 
 For more detailed instructions, see the proxy README in the `proxy/` directory.
+
+### Checking Status
+
+```bash
+# Check if services are running
+launchctl list | grep altiverr
+
+# Check logs
+tail -f logs/proxy.log
+```
+
+### Testing Webhook Delivery
+
+To test if your webhook relay system is working correctly, you can use the built-in test scripts:
+
+#### Test Local Webhook Delivery
+
+This sends a test webhook directly to your local proxy (bypassing the tunnel):
+
+```bash
+npm run test-local
+```
+
+#### Test Tunnel Webhook Delivery
+
+This sends a test webhook through your Cloudflare tunnel (simulating an actual webhook from AWS):
+
+```bash
+npm run test-tunnel
+```
+
+Both tests will:
+- Verify the required services are running
+- Send a mock SNS message with test data
+- Report the results of the delivery attempt
+
+### Switching Between Modes
+
+## Webhook Endpoints
+
+### Slack Integration
+
+The webhook relay service now supports Slack webhooks. When configuring your Slack app, you can use the following URL patterns:
+
+#### Production Deployment Flow
+
+Here's how the Slack webhook flow works in production:
+
+1. **Vercel Deployment**: The webhook relay service is deployed to Vercel
+2. **n8n Configuration**: n8n is configured with a webhook node
+3. **Slack Configuration**: Slack app is configured to send events to your Vercel-deployed webhook endpoint
+4. **Event Flow**:
+   - Slack sends webhooks to Vercel
+   - Vercel processes and publishes to SNS
+   - Your local proxy receives messages from SNS via your Cloudflare tunnel
+   - n8n receives the normalized event from your local proxy
+
+#### For n8n Integration
+
+When setting up in production:
+
+1. Create a webhook node in n8n
+2. **IMPORTANT**: For your Slack app configuration, use your Vercel deployment URL:
+   - Production: `https://altiverr-webhook-relay.vercel.app/webhook/{uuid}/webhook`
+   - Where `{uuid}` is the unique identifier shown in your n8n webhook URL
+   - Example: `https://altiverr-webhook-relay.vercel.app/webhook/09210404-b3f7-48c7-9cd2-07f922bc4b14/webhook`
+
+3. When configuring your Slack app:
+   - Go to "Event Subscriptions" in your Slack app settings
+   - Enable events
+   - Enter your Vercel URL (NOT the localhost URL shown in n8n)
+   - Subscribe to the following bot events:
+     - `message.channels` (for messages in public channels)
+     - `message.groups` (for messages in private channels if needed)
+   - Verify the URL passes Slack's verification check
+   - Save your changes
+
+4. Set the following environment variables in your Vercel deployment:
+   ```
+   SLACK_SIGNING_SECRET=<your-slack-signing-secret>
+   SLACK_APP_ID=<your-slack-app-id>
+   AWS_ACCESS_KEY_ID=<your-aws-access-key>
+   AWS_SECRET_ACCESS_KEY=<your-aws-secret-key>
+   AWS_REGION=us-west-1
+   SNS_TOPIC_ARN=<your-sns-topic-arn>
+   ```
+
+#### Local Development Testing
+
+For testing purposes during development, you can use:
+
+```bash
+# Test with your local server (won't reach Slack)
+npm run test-slack
+
+# Test with your Cloudflare tunnel
+npm run test-slack-tunnel
+```
+
+The webhook relay will:
+1. Verify the request using Slack's signature verification
+2. Normalize the data into a consistent format
+3. Add metadata to track the source and processing
+4. Publish the event to your configured SNS topic
+5. Your local proxy will receive the message from SNS and forward to n8n
+
+No additional SNS topics are required - the same topic can handle messages from different sources as the payloads are normalized with source identification.

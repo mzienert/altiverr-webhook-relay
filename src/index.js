@@ -28,9 +28,15 @@ app.use('/api', routes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/webhook', webhookRoutes);  // Handle /webhook directly for clients that don't use /api prefix
 
+// n8n specific webhook routes
+app.use('/webhook-test', webhookRoutes); // Special handling for n8n development URLs
+
 // Register error handlers
 app.use(notFoundHandler);
 app.use(errorHandler);
+
+// Sample UUID for documentation
+const sampleUuid = '09210404-b3f7-48c7-9cd2-07f922bc4b14';
 
 // Start server
 const startServer = async () => {
@@ -52,8 +58,14 @@ const startServer = async () => {
       // Log webhook URLs
       logger.info('Webhook endpoints:');
       logger.info(`- Calendly: http://localhost:${port}/api/webhook/calendly`);
+      logger.info(`- Slack: http://localhost:${port}/api/webhook/slack`);
       logger.info(`- Generic: http://localhost:${port}/api/webhook`);
       logger.info(`- Direct: http://localhost:${port}/webhook`);
+      
+      // Log n8n specific webhook URLs
+      logger.info('n8n webhook URLs:');
+      logger.info(`- Development: http://localhost:${port}/webhook-test/${sampleUuid}/webhook`);
+      logger.info(`- Production: http://localhost:${port}/webhook/${sampleUuid}/webhook`);
     });
   } catch (error) {
     logger.error('Failed to start server', { error: error.message, stack: error.stack });

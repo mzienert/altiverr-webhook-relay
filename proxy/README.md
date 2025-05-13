@@ -164,16 +164,30 @@ When developing or making changes to the code, you should run the proxy in devel
 1. First, unload the service if it's running:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.altiverr.webhook-proxy.plist
+launchctl unload ~/Library/LaunchAgents/com.altiverr.webhook-proxy-tunnel.plist
 ```
 
 2. Run in development mode:
+
+Method 1: Start each service separately
 ```bash
+# Start proxy in dev mode
 npm run dev
+
+# In a separate terminal, start tunnel in dev mode
+npm run tunnel-dev
 ```
+
+Method 2: Start complete development environment (proxy + tunnel)
+```bash
+npm run dev-environment
+```
+This will start both the tunnel and proxy in development mode, with auto-reload enabled for the proxy. Press Ctrl+C to stop both services.
 
 3. When you're done, you can either reload the service for production mode or continue developing:
 ```bash
 launchctl load ~/Library/LaunchAgents/com.altiverr.webhook-proxy.plist
+launchctl load ~/Library/LaunchAgents/com.altiverr.webhook-proxy-tunnel.plist
 ```
 
 ### Running as a Service (Production)
@@ -197,6 +211,31 @@ launchctl list | grep altiverr
 # Check logs
 tail -f logs/proxy.log
 ```
+
+### Testing Webhook Delivery
+
+To test if your webhook relay system is working correctly, you can use the built-in test scripts:
+
+#### Test Local Webhook Delivery
+
+This sends a test webhook directly to your local proxy (bypassing the tunnel):
+
+```bash
+npm run test-local
+```
+
+#### Test Tunnel Webhook Delivery
+
+This sends a test webhook through your Cloudflare tunnel (simulating an actual webhook from AWS):
+
+```bash
+npm run test-tunnel
+```
+
+Both tests will:
+- Verify the required services are running
+- Send a mock SNS message with test data
+- Report the results of the delivery attempt
 
 ### Switching Between Modes
 

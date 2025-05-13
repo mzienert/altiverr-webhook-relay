@@ -1,33 +1,32 @@
 #!/bin/bash
 
-# Script to restart the webhook relay system (proxy and tunnel)
-
+# Script to restart the webhook relay system services
 echo "=========================================="
-echo "Restarting webhook relay system"
+echo "Restarting webhook relay system services"
 echo "=========================================="
 
 # Stop all services
-echo "Stopping existing services..."
-"$(dirname "$0")/stop-services.sh"
+./scripts/stop-services.sh
 
-# Sleep a moment to ensure everything has time to shut down
-echo "Waiting for services to stop..."
+# Wait a moment for services to fully stop
 sleep 2
 
-# Start proxy service
-echo "Starting proxy service..."
-NODE_ENV=production PORT=3333 node "$(dirname "$0")/../src/index.js" &
-echo "✅ Proxy service started"
-
-# Sleep to let proxy initialize
-sleep 1
-
-# Start Cloudflare tunnel
-echo "Starting Cloudflare tunnel..."
-NODE_ENV=production /opt/homebrew/bin/cloudflared tunnel --config /Users/matthewzienert/.cloudflared/2a3eaa32-82c4-48ec-ba2f-d2ffee933af4.yml run &
-echo "✅ Cloudflare tunnel started"
+# Start services based on environment
+if [ "$1" = "prod" ]; then
+    echo "Starting services in PRODUCTION mode..."
+    ./scripts/start-tunnel.sh &
+    sleep 2
+    npm run prod
+elif [ "$1" = "dev" ]; then
+    echo "Starting services in DEVELOPMENT mode..."
+    ./scripts/start-dev-environment.sh
+else
+    echo "Starting services in PRODUCTION mode (default)..."
+    ./scripts/start-tunnel.sh &
+    sleep 2
+    npm run prod
+fi
 
 echo "=========================================="
-echo "Webhook relay system restarted"
-echo "=========================================="
-echo "To verify, check http://localhost:3333/health" 
+echo "Services restarted"
+echo "==========================================" 

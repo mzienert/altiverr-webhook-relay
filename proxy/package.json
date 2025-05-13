@@ -6,12 +6,26 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    
+    "# Development scripts": "",
     "dev": "nodemon src/index.js",
-    "dev-explicit": "scripts/start-dev.sh",
-    "prod": "PORT=3333 NODE_ENV=production node src/index.js",
+    "dev-environment": "scripts/start-dev-environment.sh",
+    "tunnel-dev": "scripts/start-tunnel-dev.sh",
+    
+    "# Production scripts": "",
+    "prod": "scripts/start-production.sh",
+    "prod-environment": "scripts/start-production-environment.sh",
     "tunnel": "scripts/start-tunnel.sh",
+    
+    "# Service management": "",
     "stop": "scripts/stop-services.sh",
     "restart": "scripts/restart-services.sh",
+    "restart-dev": "scripts/restart-services.sh dev",
+    
+    "# Testing": "",
+    "test-debug": "scripts/test-debug-webhook.sh",
+    "test-local": "scripts/test-local-webhook.sh",
+    "test-tunnel": "scripts/test-tunnel-webhook.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

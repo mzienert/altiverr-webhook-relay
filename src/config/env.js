@@ -29,6 +29,12 @@ const env = {
   },
   calendly: {
     webhookSecret: process.env.CALENDLY_WEBHOOK_SECRET
+  },
+  slack: {
+    signingSecret: process.env.SLACK_SIGNING_SECRET,
+    appId: process.env.SLACK_APP_ID,
+    clientId: process.env.SLACK_CLIENT_ID,
+    clientSecret: process.env.SLACK_CLIENT_SECRET
   }
 };
 
@@ -42,6 +48,7 @@ if (process.env.NODE_ENV !== 'production') {
     topicArn: env.aws.snsTopicArn ? '✓' : '✗',
     accessKeyId: env.aws.accessKeyId ? '✓' : '✗',
     secretAccessKey: env.aws.secretAccessKey ? '✓' : '✗',
+    slackSigningSecret: env.slack.signingSecret ? '✓' : '✗',
   });
 }
 

@@ -105,7 +105,7 @@ export function normalizeSlackData(data) {
     ? extractMessageDetails(data.event) 
     : null;
   
-  // Create normalized format
+  // Create normalized format with additional properties to help n8n find what it needs
   return {
     metadata,
     event: {
@@ -113,6 +113,11 @@ export function normalizeSlackData(data) {
       type: eventType,
       time: timestamp
     },
+    // Add critical Slack properties at the top level to ensure they're accessible for n8n
+    channel: data.event?.channel || null,  // Important: n8n Slack trigger needs this
+    team_id: data.team_id || null,
+    text: data.event?.text || null,
+    
     payload: {
       original: data,
       teamId: data.team_id,
@@ -151,21 +156,53 @@ export async function processSlackWebhook(data) {
       });
     }
     
+    // Add debug logging for SNS publishing process
+    logger.debug('Preparing to publish Slack webhook to SNS', {
+      dataType: typeof data,
+      hasEvent: !!data.event,
+      eventType: data.event?.type,
+      keyCount: Object.keys(data).length,
+      keys: Object.keys(data).join(',')
+    });
+    
     // Normalize the Slack data
     const normalizedData = normalizeSlackData(data);
     
-    // Publish to SNS using the generated ID for idempotency
-    const result = await publishToSns(
-      normalizedData, 
-      normalizedData.metadata.id
-    );
-    
-    return {
-      success: true,
-      message: 'Slack webhook processed successfully',
+    logger.debug('Normalized Slack data for SNS', {
       id: normalizedData.metadata.id,
-      snsMessageId: result.messageId
-    };
+      source: normalizedData.metadata.source,
+      eventName: normalizedData.event.name,
+      hasChannel: !!normalizedData.channel,
+      channel: normalizedData.channel,
+      hasTeamId: !!normalizedData.team_id
+    });
+    
+    // Publish to SNS using the generated ID for idempotency
+    try {
+      const result = await publishToSns(
+        normalizedData, 
+        normalizedData.metadata.id
+      );
+      
+      logger.debug('Successfully published Slack webhook to SNS', {
+        messageId: result.messageId,
+        requestId: normalizedData.metadata.id
+      });
+      
+      return {
+        success: true,
+        message: 'Slack webhook processed successfully',
+        id: normalizedData.metadata.id,
+        snsMessageId: result.messageId
+      };
+    } catch (snsError) {
+      logger.error('Error publishing Slack webhook to SNS', {
+        error: snsError.message,
+        stack: snsError.stack,
+        metadataId: normalizedData.metadata.id
+      });
+      throw snsError;
+    }
   } catch (error) {
     logger.error('Failed to process Slack webhook', { error: error.message });
     throw error;

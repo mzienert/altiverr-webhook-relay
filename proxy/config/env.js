@@ -24,8 +24,20 @@ const env = {
     publicUrl: process.env.PUBLIC_URL || 'http://localhost:3333'
   },
   n8n: {
-    webhookUrl: process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/calendly',
-    webhookUrlDev: process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/calendly',
+    // Default webhook URLs (used if no source-specific URLs are provided)
+    webhookUrl: process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook',
+    webhookUrlDev: process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test',
+    
+    // Source-specific webhook URLs
+    calendly: {
+      webhookUrl: process.env.N8N_CALENDLY_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/calendly',
+      webhookUrlDev: process.env.N8N_CALENDLY_WEBHOOK_URL_DEV || process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/calendly'
+    },
+    slack: {
+      webhookUrl: process.env.N8N_SLACK_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/slack',
+      webhookUrlDev: process.env.N8N_SLACK_WEBHOOK_URL_DEV || process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/slack'
+    },
+    
     webhookEndpoint: process.env.N8N_WEBHOOK_ENDPOINT || 'webhook',
     webhookPath: process.env.N8N_WEBHOOK_PATH || '/',
     timeout: parseInt(process.env.N8N_TIMEOUT || '10000', 10) // 10 seconds default

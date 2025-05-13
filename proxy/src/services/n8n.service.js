@@ -14,12 +14,31 @@ export async function forwardToN8n(data) {
       throw new Error('No data provided for forwarding to n8n');
     }
     
-    // Get the appropriate webhook URL based on environment
-    const n8nWebhookUrl = getWebhookUrl();
+    // Determine the webhook source from the data for source-specific routing
+    let webhookSource = null;
+    
+    // Attempt to determine source from metadata
+    if (data.metadata?.source) {
+      webhookSource = data.metadata.source;
+    } 
+    // Check for other source indicators 
+    else if (data.source) {
+      webhookSource = data.source;
+    }
+    // Try to infer from event type or structure
+    else if (data.event?.type?.includes('slack') || data.type === 'event_callback') {
+      webhookSource = 'slack';
+    } else if (data.event?.includes('calendly') || data.event_type?.includes('calendly')) {
+      webhookSource = 'calendly';
+    }
+    
+    // Get the appropriate webhook URL based on environment and source
+    const n8nWebhookUrl = getWebhookUrl('', webhookSource);
     
     // Enhanced detailed logging to help with debugging
     logger.info('Forwarding webhook payload to n8n', {
       url: n8nWebhookUrl,
+      source: webhookSource || 'unknown',
       environment: process.env.NODE_ENV || 'development',
       dataType: typeof data,
       dataKeys: Object.keys(data),
@@ -29,8 +48,11 @@ export async function forwardToN8n(data) {
     
     logger.debug('WEBHOOK FORWARDING - FULL CONFIG', {
       n8nWebhookUrl,
+      webhookSource: webhookSource,
       n8nWebhookUrlFromEnv: env.n8n.webhookUrl,
       n8nWebhookUrlDev: env.n8n.webhookUrlDev,
+      slackWebhookUrl: env.n8n.slack?.webhookUrl,
+      calendlyWebhookUrl: env.n8n.calendly?.webhookUrl,
       nodeEnv: process.env.NODE_ENV,
       isDocker: process.env.DOCKER === 'true'
     });
@@ -40,7 +62,8 @@ export async function forwardToN8n(data) {
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'Altiverr-Webhook-Proxy/1.0',
-        'X-Webhook-Source': 'proxy-service'
+        'X-Webhook-Source': 'proxy-service',
+        'X-Webhook-Type': webhookSource || 'unknown'
       },
       timeout: env.n8n.timeout
     });
@@ -48,6 +71,7 @@ export async function forwardToN8n(data) {
     logger.info('Successfully forwarded webhook to n8n', {
       statusCode: response.status,
       webhookId: data.metadata?.id || 'unknown',
+      source: webhookSource || 'unknown',
       responseData: response.data
     });
     

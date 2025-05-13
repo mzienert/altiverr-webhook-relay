@@ -9,4 +9,7 @@ router.post('/sns', snsController.handleSnsMessage);
 // Add Calendly webhooks route for internal routing 
 router.post('/api/webhook/calendly', snsController.handleSnsMessage);
 
+// Add Slack webhooks route for internal routing
+router.post('/api/webhook/slack', snsController.handleSnsMessage);
+
 export default router; 

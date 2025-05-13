@@ -12,7 +12,8 @@ router.get('/api', (req, res) => {
     version: '1.0.0',
     endpoints: {
       '/api': 'API documentation',
-      '/api/webhook/calendly': 'Calendly webhook endpoint'
+      '/api/webhook/calendly': 'Calendly webhook endpoint',
+      '/api/webhook/slack': 'Slack webhook endpoint'
     }
   });
 });
@@ -30,7 +31,8 @@ router.get('/', (req, res) => {
       '/health': 'Health check endpoint',
       '/ready': 'Readiness check endpoint',
       '/sns': 'SNS message handler (AWS)',
-      '/api/webhook/calendly': 'Calendly webhook endpoint (Internal)'
+      '/api/webhook/calendly': 'Calendly webhook endpoint (Internal)',
+      '/api/webhook/slack': 'Slack webhook endpoint (Internal)'
     },
     config: {
       publicUrl: env.server.publicUrl,

@@ -118,7 +118,7 @@ export async function handleSlackWebhook(req, res, next) {
       const webhookId = env.n8n?.slack?.webhookId || '09210404-b3f7-48c7-9cd2-07f922bc4b14';
       
       // Construct the full n8n URL
-      const n8nUrl = `http://localhost:5678/webhook/${webhookId}/webhook`;
+      const n8nUrl = `https://webhook-proxy.altiverr.com/webhook/${webhookId}/webhook`;
       
       logger.info('Directly forwarding Slack webhook to n8n', {
         url: n8nUrl,

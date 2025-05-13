@@ -98,16 +98,15 @@ export async function handleCalendlyWebhook(req, res, next) {
     
     // Always forward directly to n8n in addition to standard processing
     try {
-      // Get the Calendly webhook URL from environment or use default
-      const nodeEnv = process.env.NODE_ENV || 'development';
-      const n8nUrl = nodeEnv === 'production'
-        ? (env.n8n?.calendly?.webhookUrl || 'http://localhost:5678/webhook/calendly')
-        : (env.n8n?.calendly?.webhookUrlDev || 'http://localhost:5678/webhook-test/calendly');
+      // Use the appropriate webhook URL based on environment
+      const n8nUrl = process.env.NODE_ENV === 'production'  
+        ? (env.n8n?.calendly?.webhookUrl || 'https://webhook-proxy.altiverr.com/webhook/calendly')
+        : (env.n8n?.calendly?.webhookUrlDev || 'https://webhook-proxy.altiverr.com/webhook-test/calendly');
       
-      logger.info('Directly forwarding Calendly webhook to n8n', {
+      logger.info('Forwarding Calendly webhook to n8n', {
         url: n8nUrl,
-        eventType: req.body.event,
-        eventId
+        event: req.body.event,
+        payload: req.body.payload ? 'present' : 'missing'
       });
       
       // Forward with headers

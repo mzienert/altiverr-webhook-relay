@@ -1,0 +1,13 @@
+{
+  "name": "sns-test",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Test SNS publishing",
+  "main": "index.js",
+  "scripts": {
+    "test": "node index.js"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1000.0"
+  }
+} 

@@ -158,68 +158,158 @@ export async function handleSubscriptionConfirmation(req, res) {
  * @param {Object} res - Express response
  */
 export async function handleNotification(req, res) {
+  const traceId = `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  
   try {
     const message = req.body;
     
+    logger.info(`[${traceId}] PROCESSING SNS NOTIFICATION`, {
+      messageId: message.MessageId,
+      topicArn: message.TopicArn,
+      timestamp: message.Timestamp,
+      messageSize: message.Message ? message.Message.length : 0,
+      hasAttributes: !!message.MessageAttributes
+    });
+    
     if (!message || !message.Message) {
+      logger.error(`[${traceId}] INVALID SNS NOTIFICATION`, {
+        error: 'Missing Message field',
+        message: JSON.stringify(message)
+      });
       throw new Error('Invalid SNS notification: missing Message');
     }
     
     // Verify the signature
     if (!verifySnsMessageSignature(message)) {
-      logger.warn('SNS message signature verification failed');
+      logger.warn(`[${traceId}] SIGNATURE VERIFICATION FAILED`, {
+        messageId: message.MessageId,
+        signatureVersion: message.SignatureVersion,
+        hasSignature: !!message.Signature,
+        hasCertUrl: !!message.SigningCertURL
+      });
+      
       return res.status(400).json({
-        error: 'Invalid SNS message signature'
+        error: 'Invalid SNS message signature',
+        traceId
       });
     }
     
     let parsedMessage;
     try {
       parsedMessage = JSON.parse(message.Message);
+      
+      logger.debug(`[${traceId}] PARSED SNS MESSAGE`, {
+        parsedMessageKeys: Object.keys(parsedMessage),
+        dataType: typeof parsedMessage.data,
+        hasId: !!parsedMessage.id,
+        id: parsedMessage.id,
+        hasMetadata: !!parsedMessage.data?.metadata,
+        source: parsedMessage.data?.metadata?.source || 'unknown',
+        messagePreview: JSON.stringify(parsedMessage).substring(0, 300)
+      });
     } catch (error) {
-      logger.error('Error parsing SNS message', { error: error.message });
+      logger.error(`[${traceId}] ERROR PARSING SNS MESSAGE`, {
+        error: error.message,
+        messagePreview: message.Message.substring(0, 300)
+      });
       throw new Error('Failed to parse SNS message: ' + error.message);
     }
     
     // Check for duplicate messages (idempotency)
     const messageId = parsedMessage.id || message.MessageId;
     if (hasMessageBeenProcessed(messageId)) {
-      logger.info('Skipping duplicate SNS message', { messageId });
+      logger.info(`[${traceId}] SKIPPING DUPLICATE SNS MESSAGE`, {
+        messageId,
+        source: parsedMessage.data?.metadata?.source || 'unknown'
+      });
+      
       return res.status(200).json({
         message: 'Message already processed',
-        messageId
+        messageId,
+        traceId
       });
     }
     
+    // Check for Slack-specific messages
+    const isSlackMessage = parsedMessage.data?.metadata?.source === 'slack' || 
+                          (parsedMessage.data?.payload?.original?.type === 'event_callback');
+    
+    if (isSlackMessage) {
+      logger.info(`[${traceId}] DETECTED SLACK MESSAGE IN SNS`, {
+        messageId,
+        teamId: parsedMessage.data?.payload?.original?.team_id,
+        eventType: parsedMessage.data?.payload?.original?.event?.type,
+        eventTs: parsedMessage.data?.payload?.original?.event?.ts,
+        channel: parsedMessage.data?.payload?.original?.event?.channel,
+        user: parsedMessage.data?.payload?.original?.event?.user,
+        text: parsedMessage.data?.payload?.original?.event?.text?.substring(0, 100)
+      });
+      
+      // Check for manual user messages vs. bot messages
+      const isUserMessage = 
+        parsedMessage.data?.payload?.original?.event?.type === 'message' && 
+        !parsedMessage.data?.payload?.original?.event?.bot_id && 
+        parsedMessage.data?.payload?.original?.event?.user;
+      
+      if (isUserMessage) {
+        logger.info(`[${traceId}] DETECTED MANUAL SLACK USER MESSAGE IN SNS`, {
+          user: parsedMessage.data?.payload?.original?.event?.user,
+          text: parsedMessage.data?.payload?.original?.event?.text?.substring(0, 100),
+          channel: parsedMessage.data?.payload?.original?.event?.channel,
+          ts: parsedMessage.data?.payload?.original?.event?.ts
+        });
+      }
+    }
+    
     // Process the message by forwarding to n8n
-    const result = await forwardToN8n(parsedMessage);
+    logger.info(`[${traceId}] FORWARDING SNS MESSAGE TO N8N`, {
+      messageId,
+      source: parsedMessage.data?.metadata?.source || 'unknown',
+      isSlackMessage,
+      timestamp: new Date().toISOString()
+    });
+    
+    const result = await forwardToN8n({
+      data: parsedMessage,
+      id: messageId,
+      source: parsedMessage.data?.metadata?.source
+    });
     
     // Mark as processed
     markMessageAsProcessed(messageId);
     
-    logger.info('Successfully processed SNS notification', {
+    logger.info(`[${traceId}] SUCCESSFULLY PROCESSED SNS NOTIFICATION`, {
       messageId,
       result: result.success ? 'success' : 'failure',
-      statusCode: result.statusCode
+      statusCode: result.statusCode,
+      source: parsedMessage.data?.metadata?.source || 'unknown',
+      isSlackMessage,
+      responseTime: result.responseTime
     });
     
     return res.status(200).json({
       success: result.success,
       messageId,
-      forwarded: true
+      forwarded: true,
+      traceId
     });
   } catch (error) {
-    logger.error('Error processing SNS notification', { error: error.message });
-    
-    // Notify about the error
-    sendErrorNotification('Failed to process SNS notification', {
+    logger.error(`[${traceId}] ERROR PROCESSING SNS NOTIFICATION`, {
       error: error.message,
       stack: error.stack
     });
     
+    // Notify about the error
+    sendErrorNotification('Failed to process SNS notification', {
+      error: error.message,
+      stack: error.stack,
+      traceId
+    });
+    
     return res.status(500).json({
       error: 'Failed to process notification',
-      message: error.message
+      message: error.message,
+      traceId
     });
   }
 }
@@ -257,107 +347,256 @@ export async function handleUnsubscribeConfirmation(req, res) {
  * @param {Object} res - Express response
  */
 export async function handleSnsMessage(req, res) {
-  // Super verbose logging
-  logger.debug('******* RAW SNS REQUEST RECEIVED *******');
-  logger.debug('Headers:', req.headers);
-  logger.debug('Body type:', typeof req.body);
-  logger.debug('Body value:', req.body);
-  logger.debug('Raw body if available:', req.rawBody);
-  logger.debug('URL:', req.url);
-  logger.debug('Method:', req.method);
-  logger.debug('***************************************');
+  const traceId = `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const startTime = Date.now();
   
-  // Add detailed logging
-  logger.debug('Received request to SNS endpoint', {
-    headers: req.headers,
-    contentType: req.headers['content-type'],
-    contentLength: req.headers['content-length'],
-    method: req.method,
-    rawBody: typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
-  });
-  
-  // Try parsing the body in different ways
-  let parsedBody = req.body;
-  
-  // If body is string, try to parse as JSON
-  if (typeof req.body === 'string') {
-    try {
-      parsedBody = JSON.parse(req.body);
-      logger.debug('Successfully parsed string body as JSON', { parsedBody });
-    } catch (error) {
-      logger.error('Failed to parse text body as JSON', { 
-        error: error.message, 
-        body: req.body 
+  try {
+    // Super verbose logging
+    logger.debug(`[${traceId}] RAW SNS REQUEST RECEIVED`, { 
+      headers: req.headers,
+      contentType: req.headers['content-type'],
+      contentLength: req.headers['content-length'],
+      method: req.method,
+      path: req.path,
+      url: req.url,
+      query: req.query,
+      ip: req.ip,
+    });
+    
+    // Debug body based on content type
+    if (req.headers['content-type'] === 'application/json') {
+      logger.debug(`[${traceId}] REQUEST JSON BODY`, {
+        body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body).substring(0, 1000)
+      });
+    } else if (req.headers['content-type'] === 'text/plain') {
+      logger.debug(`[${traceId}] REQUEST TEXT BODY`, {
+        body: req.body.substring(0, 1000)
+      });
+    } else {
+      logger.debug(`[${traceId}] REQUEST BODY TYPE`, {
+        type: typeof req.body,
+        isBuffer: Buffer.isBuffer(req.body),
+        length: Buffer.isBuffer(req.body) ? req.body.length : (typeof req.body === 'string' ? req.body.length : 'unknown')
       });
     }
-  }
-  
-  // If body is buffer, try to parse as string then JSON
-  if (Buffer.isBuffer(req.body)) {
-    try {
-      const bodyString = req.body.toString('utf8');
-      logger.debug('Converted Buffer to string', { bodyString });
-      
+    
+    // Try parsing the body in different ways
+    let parsedBody = req.body;
+    
+    // If body is string, try to parse as JSON
+    if (typeof req.body === 'string') {
       try {
-        parsedBody = JSON.parse(bodyString);
-        logger.debug('Successfully parsed buffer body as JSON', { parsedBody });
-      } catch (innerError) {
-        logger.error('Failed to parse buffer as JSON', { 
-          error: innerError.message, 
-          body: bodyString 
+        parsedBody = JSON.parse(req.body);
+        logger.debug(`[${traceId}] SUCCESSFULLY PARSED STRING BODY AS JSON`, {
+          parsedKeys: Object.keys(parsedBody),
+          messageType: parsedBody.Type,
+          hasMessage: !!parsedBody.Message
+        });
+      } catch (error) {
+        logger.error(`[${traceId}] FAILED TO PARSE TEXT BODY AS JSON`, { 
+          error: error.message, 
+          bodyPreview: (req.body || '').substring(0, 300)
         });
       }
-    } catch (error) {
-      logger.error('Failed to convert buffer to string', { 
-        error: error.message 
+    }
+    
+    // If body is buffer, try to parse as string then JSON
+    if (Buffer.isBuffer(req.body)) {
+      try {
+        const bodyString = req.body.toString('utf8');
+        logger.debug(`[${traceId}] CONVERTED BUFFER TO STRING`, {
+          length: bodyString.length,
+          preview: bodyString.substring(0, 200)
+        });
+        
+        try {
+          parsedBody = JSON.parse(bodyString);
+          logger.debug(`[${traceId}] SUCCESSFULLY PARSED BUFFER BODY AS JSON`, {
+            parsedKeys: Object.keys(parsedBody),
+            messageType: parsedBody.Type
+          });
+        } catch (innerError) {
+          logger.error(`[${traceId}] FAILED TO PARSE BUFFER AS JSON`, { 
+            error: innerError.message, 
+            bodyPreview: bodyString.substring(0, 300)
+          });
+        }
+      } catch (error) {
+        logger.error(`[${traceId}] FAILED TO CONVERT BUFFER TO STRING`, { 
+          error: error.message 
+        });
+      }
+    }
+    
+    // Use the parsed body if we have one
+    if (parsedBody && typeof parsedBody === 'object') {
+      req.body = parsedBody;
+      logger.debug(`[${traceId}] USING PARSED BODY`, {
+        type: typeof parsedBody,
+        keys: Object.keys(parsedBody)
       });
     }
-  }
-  
-  // Use the parsed body if we have one
-  if (parsedBody && typeof parsedBody === 'object') {
-    req.body = parsedBody;
-  }
-  
-  const messageType = req.headers['x-amz-sns-message-type'] || 
+    
+    const messageType = req.headers['x-amz-sns-message-type'] || 
                       (req.body && req.body.Type);
-  
-  logger.debug('Received SNS message', { 
-    type: messageType,
-    body: req.body
-  });
-  
-  // If no message type found in headers or body, try to determine from structure
-  if (!messageType && req.body) {
-    if (req.body.SubscribeURL && req.body.TopicArn) {
-      logger.debug('Detected SubscriptionConfirmation from body structure');
-      return handleSubscriptionConfirmation(req, res);
-    } else if (req.body.Message && req.body.MessageId) {
-      logger.debug('Detected Notification from body structure');
-      return handleNotification(req, res);
+    
+    logger.info(`[${traceId}] SNS MESSAGE CLASSIFICATION`, { 
+      messageType: messageType || 'unknown',
+      hasTopicArn: !!req.body.TopicArn,
+      hasSubscribeUrl: !!req.body.SubscribeURL,
+      hasMessage: !!req.body.Message,
+      hasMessageId: !!req.body.MessageId,
+      contentType: req.headers['content-type'],
+      source: req.body.Message ? 'Has Message field' : 'No Message field'
+    });
+    
+    // If the message contains a standard webhook (not SNS), forward it directly
+    if (!messageType && 
+        !req.body.TopicArn && 
+        !req.body.SubscribeURL && 
+        !req.body.Message && 
+        !req.body.MessageId) {
+      
+      // Special detection for Slack webhooks
+      const isSlack = req.body.type === 'event_callback' || 
+                     req.body.event?.type === 'message' ||
+                     req.body.team_id;
+                     
+      if (isSlack) {
+        logger.info(`[${traceId}] DETECTED DIRECT SLACK WEBHOOK (NOT SNS)`, {
+          type: req.body.type,
+          eventType: req.body.event?.type,
+          teamId: req.body.team_id,
+          channel: req.body.event?.channel,
+          user: req.body.event?.user,
+          messageText: req.body.event?.text?.substring(0, 100)
+        });
+        
+        // Forward directly to n8n
+        const directResult = await forwardToN8n({
+          data: req.body,
+          id: `direct_slack_${Date.now()}`,
+          source: 'slack'
+        });
+        
+        const processingTime = Date.now() - startTime;
+        
+        logger.info(`[${traceId}] FORWARDED DIRECT SLACK WEBHOOK`, {
+          success: directResult.success,
+          statusCode: directResult.statusCode || 'unknown',
+          processingTime: `${processingTime}ms`
+        });
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Direct Slack webhook processed',
+          traceId,
+          processingTime
+        });
+      }
+      
+      // Special detection for Calendly webhooks
+      const isCalendly = req.body.event?.includes('calendly') ||
+                        req.body.payload?.event_type?.kind === 'calendly';
+                        
+      if (isCalendly) {
+        logger.info(`[${traceId}] DETECTED DIRECT CALENDLY WEBHOOK (NOT SNS)`, {
+          event: req.body.event,
+          uri: req.body.payload?.uri || 'unknown'
+        });
+        
+        // Forward directly to n8n
+        const directResult = await forwardToN8n({
+          data: req.body,
+          id: `direct_calendly_${Date.now()}`,
+          source: 'calendly'
+        });
+        
+        const processingTime = Date.now() - startTime;
+        
+        logger.info(`[${traceId}] FORWARDED DIRECT CALENDLY WEBHOOK`, {
+          success: directResult.success,
+          statusCode: directResult.statusCode || 'unknown',
+          processingTime: `${processingTime}ms`
+        });
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Direct Calendly webhook processed',
+          traceId,
+          processingTime
+        });
+      }
     }
-  }
-  
-  switch (messageType) {
-    case 'SubscriptionConfirmation':
-      return handleSubscriptionConfirmation(req, res);
-      
-    case 'Notification':
-      return handleNotification(req, res);
-      
-    case 'UnsubscribeConfirmation':
-      return handleUnsubscribeConfirmation(req, res);
-      
-    default:
-      logger.warn('Received unknown SNS message type', { 
-        type: messageType,
-        headers: req.headers,
-        body: req.body
-      });
-      return res.status(400).json({
-        error: 'Unsupported message type',
-        type: messageType || 'unknown'
-      });
+    
+    // If no message type found in headers or body, try to determine from structure
+    if (!messageType && req.body) {
+      if (req.body.SubscribeURL && req.body.TopicArn) {
+        logger.debug(`[${traceId}] DETECTED SUBSCRIPTION CONFIRMATION FROM STRUCTURE`);
+        
+        // Add traceId to req for tracking
+        req.traceId = traceId;
+        
+        return handleSubscriptionConfirmation(req, res);
+      } else if (req.body.Message && req.body.MessageId) {
+        logger.debug(`[${traceId}] DETECTED NOTIFICATION FROM STRUCTURE`);
+        
+        // Add traceId to req for tracking
+        req.traceId = traceId;
+        
+        return handleNotification(req, res);
+      }
+    }
+    
+    // Add traceId to req for tracking
+    req.traceId = traceId;
+    
+    // Use switch statement to route to appropriate handler
+    switch (messageType) {
+      case 'SubscriptionConfirmation':
+        logger.info(`[${traceId}] ROUTING TO SUBSCRIPTION CONFIRMATION HANDLER`);
+        return handleSubscriptionConfirmation(req, res);
+        
+      case 'Notification':
+        logger.info(`[${traceId}] ROUTING TO NOTIFICATION HANDLER`);
+        return handleNotification(req, res);
+        
+      case 'UnsubscribeConfirmation':
+        logger.info(`[${traceId}] ROUTING TO UNSUBSCRIBE CONFIRMATION HANDLER`);
+        return handleUnsubscribeConfirmation(req, res);
+        
+      default:
+        const processingTime = Date.now() - startTime;
+        
+        logger.warn(`[${traceId}] UNKNOWN SNS MESSAGE TYPE`, { 
+          type: messageType || 'unknown',
+          headers: JSON.stringify(req.headers),
+          bodyKeys: req.body ? Object.keys(req.body) : [],
+          processingTime: `${processingTime}ms`
+        });
+        
+        return res.status(400).json({
+          error: 'Unsupported message type',
+          type: messageType || 'unknown',
+          traceId,
+          processingTime
+        });
+    }
+  } catch (error) {
+    const processingTime = Date.now() - startTime;
+    
+    logger.error(`[${traceId}] UNHANDLED ERROR IN SNS HANDLER`, {
+      error: error.message,
+      stack: error.stack,
+      processingTime: `${processingTime}ms`
+    });
+    
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message,
+      traceId,
+      processingTime
+    });
   }
 }
 

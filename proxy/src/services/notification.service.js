@@ -97,11 +97,19 @@ export async function sendNotification(message, options = {}) {
 export function sendStartupNotification() {
   const n8nWebhookUrl = getWebhookUrl();
   
+  // Get the Slack webhook URL for notification
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  const slackWebhookId = env.n8n.slack.webhookId;
+  const slackWebhookUrl = nodeEnv === 'production'
+    ? `http://localhost:5678/webhook/${slackWebhookId}/webhook`
+    : `http://localhost:5678/webhook-test/${slackWebhookId}/webhook`;
+  
   sendNotification('Webhook Proxy Service Started', {
     data: {
       port: env.server.port,
       publicUrl: env.server.publicUrl,
       n8nWebhookUrl: n8nWebhookUrl,
+      slackWebhookUrl: slackWebhookUrl,
       environment: process.env.NODE_ENV || 'development'
     }
   });

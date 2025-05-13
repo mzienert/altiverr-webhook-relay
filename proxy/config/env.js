@@ -34,8 +34,16 @@ const env = {
       webhookUrlDev: process.env.N8N_CALENDLY_WEBHOOK_URL_DEV || process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/calendly'
     },
     slack: {
-      webhookUrl: process.env.N8N_SLACK_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/slack',
-      webhookUrlDev: process.env.N8N_SLACK_WEBHOOK_URL_DEV || process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/slack'
+      // Use specific webhook ID for Slack
+      webhookId: process.env.N8N_SLACK_WEBHOOK_ID || '09210404-b3f7-48c7-9cd2-07f922bc4b14',
+      // Use specific webhook URL with the ID - ensuring correct format for production
+      webhookUrl: process.env.N8N_SLACK_WEBHOOK_URL || `http://localhost:5678/webhook/${process.env.N8N_SLACK_WEBHOOK_ID || '09210404-b3f7-48c7-9cd2-07f922bc4b14'}/webhook`,
+      webhookUrlDev: process.env.N8N_SLACK_WEBHOOK_URL_DEV || `http://localhost:5678/webhook-test/${process.env.N8N_SLACK_WEBHOOK_ID || '09210404-b3f7-48c7-9cd2-07f922bc4b14'}/webhook`,
+      // Add additional standard webhook URLs as fallbacks
+      webhookUrlFallbacks: [
+        'http://localhost:5678/webhook/slack',
+        'http://localhost:5678/webhook'
+      ]
     },
     
     webhookEndpoint: process.env.N8N_WEBHOOK_ENDPOINT || 'webhook',

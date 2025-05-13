@@ -18,6 +18,15 @@ export async function publishToSns(data, messageId) {
       throw new Error('Message ID is required for idempotency');
     }
     
+    // Log SNS configuration details
+    logger.info('SNS Configuration Check', {
+      topicArn: env.aws.snsTopicArn || 'NOT SET',
+      region: env.aws.region || 'NOT SET',
+      hasAccessKey: env.aws.accessKeyId ? 'YES' : 'NO',
+      hasSecretKey: env.aws.secretAccessKey ? 'YES' : 'NO',
+      messageId
+    });
+    
     if (!env.aws.snsTopicArn) {
       throw new Error('SNS Topic ARN is not configured');
     }
@@ -40,11 +49,18 @@ export async function publishToSns(data, messageId) {
       }
     };
     
+    logger.debug('Attempting to publish message to SNS', {
+      messageId,
+      topicArn: params.TopicArn,
+      dataSize: JSON.stringify(data).length
+    });
+    
     const result = await sns.publish(params).promise();
     
     logger.info('Message published to SNS successfully', { 
       messageId: result.MessageId,
-      requestId: messageId
+      requestId: messageId,
+      snsTopicArn: env.aws.snsTopicArn.split(':').pop() // Just log the topic name for privacy
     });
     
     return {
@@ -56,7 +72,9 @@ export async function publishToSns(data, messageId) {
     logger.error('Failed to publish message to SNS', {
       error: error.message,
       stack: env.api.env === 'development' ? error.stack : undefined,
-      requestId: messageId
+      requestId: messageId,
+      topicArn: env.aws.snsTopicArn ? 'SET' : 'NOT SET',
+      region: env.aws.region || 'NOT SET'
     });
     
     throw error;

@@ -37,9 +37,18 @@ const server = app.listen(env.server.port, env.server.host, () => {
   // Get the currently active webhook URL based on environment
   const currentWebhookUrl = getWebhookUrl();
   
+  // Get the Slack webhook URL for clarity
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  const slackWebhookId = env.n8n.slack.webhookId;
+  const slackWebhookUrl = nodeEnv === 'production'
+    ? `http://localhost:5678/webhook/${slackWebhookId}/webhook`
+    : `http://localhost:5678/webhook-test/${slackWebhookId}/webhook`;
+  
   logger.info(`Webhook proxy started at http://${env.server.host}:${env.server.port}`);
   logger.info(`Public URL: ${env.server.publicUrl}`);
-  logger.info(`Forwarding to n8n at: ${currentWebhookUrl}`);
+  logger.info(`Default webhook URL: ${currentWebhookUrl}`);
+  logger.info(`Slack webhook URL: ${slackWebhookUrl}`);
+  logger.info(`Calendly webhook URL: ${env.n8n.calendly.webhookUrl}`);
   
   // Send startup notification
   sendStartupNotification();

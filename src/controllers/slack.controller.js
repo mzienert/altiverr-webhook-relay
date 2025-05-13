@@ -10,6 +10,15 @@ import responder from '../utils/responder.js';
  */
 export async function handleSlackWebhook(req, res, next) {
   try {
+    // Handle GET requests (used by Slack for URL verification)
+    if (req.method === 'GET') {
+      logger.info('Received Slack URL verification via GET');
+      return res.status(200).json({
+        success: true,
+        message: 'Slack webhook endpoint is active'
+      });
+    }
+    
     logger.info('Received Slack webhook', {
       type: req.body.type || 'unknown',
       event: req.body.event?.type || 'unknown'

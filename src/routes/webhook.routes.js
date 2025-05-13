@@ -18,6 +18,21 @@ router.post('/calendly', calendlyAuthMiddleware, calendlyController.handleCalend
 // Slack webhook route
 router.post('/slack', slackAuthMiddleware, slackController.handleSlackWebhook);
 
+// Function to handle GET requests for webhook verification
+const handleWebhookVerification = (req, res) => {
+  logger.info(`Received verification GET request for: ${req.path}`, {
+    uuid: req.params.uuid,
+    query: req.query
+  });
+  
+  // Return a 200 OK with minimal response
+  // This allows Slack to verify the URL and n8n to check health
+  return res.status(200).json({
+    success: true,
+    message: 'Webhook endpoint is active'
+  });
+};
+
 // n8n specific webhook routes with UUID pattern - exact match to n8n URLs
 // Format: /webhook-test/{uuid}/webhook (development)
 router.post('-test/:uuid/webhook', (req, res) => {
@@ -29,6 +44,9 @@ router.post('-test/:uuid/webhook', (req, res) => {
   routeWebhookBasedOnPayload(req, res);
 });
 
+// Add GET method for URL verification on development URL
+router.get('-test/:uuid/webhook', handleWebhookVerification);
+
 // Format: /{uuid}/webhook (production)
 router.post('/:uuid/webhook', (req, res) => {
   logger.info('Received webhook from n8n production URL', {
@@ -39,6 +57,9 @@ router.post('/:uuid/webhook', (req, res) => {
   routeWebhookBasedOnPayload(req, res);
 });
 
+// Add GET method for URL verification on production URL
+router.get('/:uuid/webhook', handleWebhookVerification);
+
 // Root webhook handler - for compatibility with Calendly and other webhooks that might not specify a subpath
 router.post('/', (req, res) => {
   logger.info('Received webhook at root webhook path, attempting to route based on headers or payload');
@@ -46,6 +67,9 @@ router.post('/', (req, res) => {
   // Route based on payload
   routeWebhookBasedOnPayload(req, res);
 });
+
+// Add GET method for root webhook URL verification
+router.get('/', handleWebhookVerification);
 
 /**
  * Helper function to route webhooks based on payload/headers

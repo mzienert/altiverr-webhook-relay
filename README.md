@@ -336,3 +336,17 @@ The webhook relay will:
 5. Your local proxy will receive the message from SNS and forward to n8n
 
 No additional SNS topics are required - the same topic can handle messages from different sources as the payloads are normalized with source identification.
+
+#### Slack URL Verification
+
+When you add a new URL to your Slack app's Event Subscriptions, Slack will:
+
+1. Send a GET request to verify the URL is accessible
+2. Send a POST request with a `url_verification` event containing a challenge parameter
+
+The webhook relay handles both verification methods:
+
+- GET requests are acknowledged with a 200 OK response
+- POST `url_verification` events are automatically responded to with the challenge value
+
+This ensures that Slack can successfully verify your webhook URL during setup.

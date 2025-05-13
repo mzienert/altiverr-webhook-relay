@@ -5,6 +5,7 @@ import { notFoundHandler, errorHandler } from './middlewares/error.js';
 import env from './config/env.js';
 import logger from './utils/logger.js';
 import { validateSnsConfig } from './config/aws.js';
+import slackController from './controllers/slack.controller.js';
 
 // Initialize Express app
 const app = createApp();
@@ -30,6 +31,27 @@ app.use('/webhook', webhookRoutes);  // Handle /webhook directly for clients tha
 
 // n8n specific webhook routes
 app.use('/webhook-test', webhookRoutes); // Special handling for n8n development URLs
+
+// Legacy Slack webhook route format detected in the logs
+// Handle: /api/slack-webhook/{uuid}
+app.post('/api/slack-webhook/:uuid', (req, res) => {
+  logger.info('Received webhook on legacy slack-webhook path', {
+    uuid: req.params.uuid,
+    agent: req.headers['user-agent']
+  });
+  return slackController.handleSlackWebhook(req, res);
+});
+
+// Also handle GET requests for verification
+app.get('/api/slack-webhook/:uuid', (req, res) => {
+  logger.info('Received verification GET request on legacy slack-webhook path', {
+    uuid: req.params.uuid
+  });
+  return res.status(200).json({
+    success: true,
+    message: 'Webhook endpoint is active'
+  });
+});
 
 // Register error handlers
 app.use(notFoundHandler);
@@ -66,6 +88,10 @@ const startServer = async () => {
       logger.info('n8n webhook URLs:');
       logger.info(`- Development: http://localhost:${port}/webhook-test/${sampleUuid}/webhook`);
       logger.info(`- Production: http://localhost:${port}/webhook/${sampleUuid}/webhook`);
+      
+      // Log legacy format
+      logger.info('Legacy webhook URLs (for compatibility):');
+      logger.info(`- Legacy Slack: http://localhost:${port}/api/slack-webhook/${sampleUuid}`);
     });
   } catch (error) {
     logger.error('Failed to start server', { error: error.message, stack: error.stack });

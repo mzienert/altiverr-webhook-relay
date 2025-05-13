@@ -350,3 +350,11 @@ The webhook relay handles both verification methods:
 - POST `url_verification` events are automatically responded to with the challenge value
 
 This ensures that Slack can successfully verify your webhook URL during setup.
+
+#### Legacy URL Formats
+
+For backward compatibility, the system also supports these legacy URL formats:
+
+- `/api/slack-webhook/{uuid}` - An older format for Slack webhooks
+
+If you have existing integrations using these formats, they will continue to work. However, for new setups, we recommend using the standard formats described above.

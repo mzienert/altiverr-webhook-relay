@@ -35,6 +35,24 @@ const env = {
     appId: process.env.SLACK_APP_ID,
     clientId: process.env.SLACK_CLIENT_ID,
     clientSecret: process.env.SLACK_CLIENT_SECRET
+  },
+  n8n: {
+    webhookUrl: process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook',
+    webhookUrlDev: process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test',
+    timeout: process.env.N8N_TIMEOUT ? parseInt(process.env.N8N_TIMEOUT, 10) : 10000,
+    slack: {
+      webhookId: process.env.N8N_SLACK_WEBHOOK_ID || '09210404-b3f7-48c7-9cd2-07f922bc4b14',
+      webhookUrl: process.env.N8N_SLACK_WEBHOOK_URL,
+      webhookUrlDev: process.env.N8N_SLACK_WEBHOOK_URL_DEV
+    },
+    calendly: {
+      webhookUrl: process.env.N8N_CALENDLY_WEBHOOK_URL,
+      webhookUrlDev: process.env.N8N_CALENDLY_WEBHOOK_URL_DEV
+    }
+  },
+  server: {
+    host: process.env.SERVER_HOST || 'localhost',
+    port: process.env.SERVER_PORT || process.env.PORT || 8080
   }
 };
 

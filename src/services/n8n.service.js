@@ -1,5 +1,5 @@
 import axios from 'axios';
-import env from '../../config/env.js';
+import env from '../config/env.js';
 import logger from '../utils/logger.js';
 import { getWebhookUrl } from '../utils/webhookUrl.js';
 
@@ -160,8 +160,8 @@ export async function forwardToN8n(data) {
         code: error.code,
         n8nUrl: getWebhookUrl(),
         originalN8nUrl: env.n8n.webhookUrl,
-        host: env.server.host,
-        port: env.server.port
+        host: env.server?.host || 'localhost',
+        port: env.server?.port || env.api.port
       });
     }
     

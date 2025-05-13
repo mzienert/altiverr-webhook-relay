@@ -4,6 +4,60 @@ import logger from '../utils/logger.js';
 import { getWebhookUrl } from '../utils/webhookUrl.js';
 
 /**
+ * Extract Slack payload from SNS message
+ * @param {Object} data - SNS message data
+ * @returns {Object} Extracted Slack payload or null if extraction failed
+ */
+export function extractSlackFromSNS(data) {
+  if (!data || !data.Message || typeof data.Message !== 'string') {
+    return null;
+  }
+
+  try {
+    // Parse the SNS Message field
+    const parsedMessage = JSON.parse(data.Message);
+    
+    // Debug the structure
+    logger.debug('Parsed SNS message structure:', {
+      hasData: !!parsedMessage.data,
+      hasMetadata: !!parsedMessage.data?.metadata,
+      hasPayload: !!parsedMessage.data?.payload,
+      source: parsedMessage.data?.metadata?.source,
+      channelPresent: !!parsedMessage.data?.channel,
+      teamIdPresent: !!parsedMessage.data?.team_id
+    });
+    
+    // Check if we have the expected structure for Slack
+    if (parsedMessage.data?.metadata?.source !== 'slack' || !parsedMessage.data?.payload?.original) {
+      return null;
+    }
+    
+    // Extract the Slack payload
+    const slackPayload = parsedMessage.data.payload.original;
+    
+    // Add channel from SNS wrapper if needed
+    if (parsedMessage.data.channel && slackPayload.event && !slackPayload.event.channel) {
+      slackPayload.event.channel = parsedMessage.data.channel;
+    }
+    
+    // Add team_id if needed
+    if (parsedMessage.data.team_id && !slackPayload.team_id) {
+      slackPayload.team_id = parsedMessage.data.team_id;
+    }
+    
+    // Ensure event has a channel for Slack trigger
+    if (slackPayload.event && !slackPayload.event.channel) {
+      slackPayload.event.channel = 'extracted-channel';
+    }
+    
+    return slackPayload;
+  } catch (error) {
+    logger.error('Failed to extract Slack payload from SNS:', error);
+    return null;
+  }
+}
+
+/**
  * Forward webhook data to n8n
  * @param {Object} data - The webhook data to forward
  * @returns {Promise<Object>} The n8n response
@@ -121,5 +175,6 @@ export async function forwardToN8n(data) {
 }
 
 export default {
-  forwardToN8n
+  forwardToN8n,
+  extractSlackFromSNS
 }; 

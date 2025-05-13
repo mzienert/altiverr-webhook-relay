@@ -86,8 +86,10 @@ const startServer = async () => {
       
       // Log n8n specific webhook URLs
       logger.info('n8n webhook URLs:');
-      logger.info(`- Development: http://localhost:${port}/webhook-test/${sampleUuid}/webhook`);
-      logger.info(`- Production: http://localhost:${port}/webhook/${sampleUuid}/webhook`);
+      logger.info(`- Slack (Dev): http://localhost:${port}/webhook-test/${sampleUuid}/webhook`);
+      logger.info(`- Slack (Prod): http://localhost:${port}/webhook/${sampleUuid}/webhook`);
+      logger.info(`- Calendly (Dev): http://localhost:${port}/webhook-test/calendly`);
+      logger.info(`- Calendly (Prod): http://localhost:${port}/webhook/calendly`);
       
       // Log legacy format
       logger.info('Legacy webhook URLs (for compatibility):');

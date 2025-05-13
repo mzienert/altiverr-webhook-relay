@@ -358,3 +358,39 @@ For backward compatibility, the system also supports these legacy URL formats:
 - `/api/slack-webhook/{uuid}` - An older format for Slack webhooks
 
 If you have existing integrations using these formats, they will continue to work. However, for new setups, we recommend using the standard formats described above.
+
+### Webhook Routing Issues
+
+If you're experiencing webhook routing issues between Slack and Calendly, follow these steps:
+
+#### In n8n
+
+1. **Use separate dedicated webhook nodes**:
+   - Create a separate webhook node specifically for Slack 
+   - Create a separate webhook node specifically for Calendly
+   - Do NOT reuse the same webhook node URL for both services
+
+2. **Configure each webhook with clear identification**:
+   - For Slack: Use the path `/webhook/{uuid}/webhook` where `{uuid}` is provided by n8n
+   - For Calendly: Use the path `/webhook-test/calendly` or `/webhook/calendly`
+
+3. **Testing routes individually**:
+   ```bash
+   # Test Slack webhook routing
+   npm run test-slack
+   
+   # Test Calendly webhook routing
+   npm run test-calendly
+   ```
+
+#### In Slack and Calendly
+
+1. **Use correct webhook URLs in each service**:
+   - In Slack App settings: Use only the dedicated Slack webhook URL
+   - In Calendly settings: Use only the dedicated Calendly webhook URL
+
+2. **Check logs for routing issues**:
+   If you see messages being misrouted, the logs will show which service was detected:
+   ```
+   Webhook type detected: slack|calendly|unknown
+   ```

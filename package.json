@@ -27,9 +27,10 @@
     "restart-dev": "scripts/restart-services.sh dev",
     "test-local": "scripts/test-local-webhook.sh",
     "test-tunnel": "scripts/test-tunnel-webhook.sh",
-    "test-slack": "scripts/test-slack-webhook.sh",
-    "test-slack-tunnel": "scripts/test-slack-webhook.sh tunnel",
-    "test-slack-vercel": "scripts/test-slack-vercel.sh",
+    "test-slack": "scripts/test-slack-webhook.sh local slack",
+    "test-calendly": "scripts/test-slack-webhook.sh local calendly",
+    "test-slack-tunnel": "scripts/test-slack-webhook.sh tunnel slack",
+    "test-calendly-tunnel": "scripts/test-slack-webhook.sh tunnel calendly",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

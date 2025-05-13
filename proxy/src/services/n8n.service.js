@@ -238,6 +238,60 @@ function detectWebhookSource(data) {
 }
 
 /**
+ * Extract Slack payload from SNS message
+ * @param {Object} data - SNS message data
+ * @returns {Object} Extracted Slack payload or null if extraction failed
+ */
+export function extractSlackFromSNS(data) {
+  if (!data || !data.Message || typeof data.Message !== 'string') {
+    return null;
+  }
+
+  try {
+    // Parse the SNS Message field
+    const parsedMessage = JSON.parse(data.Message);
+    
+    // Debug the structure
+    logger.debug('Parsed SNS message structure:', {
+      hasData: !!parsedMessage.data,
+      hasMetadata: !!parsedMessage.data?.metadata,
+      hasPayload: !!parsedMessage.data?.payload,
+      source: parsedMessage.data?.metadata?.source,
+      channelPresent: !!parsedMessage.data?.channel,
+      teamIdPresent: !!parsedMessage.data?.team_id
+    });
+    
+    // Check if we have the expected structure for Slack
+    if (parsedMessage.data?.metadata?.source !== 'slack' || !parsedMessage.data?.payload?.original) {
+      return null;
+    }
+    
+    // Extract the Slack payload
+    const slackPayload = parsedMessage.data.payload.original;
+    
+    // Add channel from SNS wrapper if needed
+    if (parsedMessage.data.channel && slackPayload.event && !slackPayload.event.channel) {
+      slackPayload.event.channel = parsedMessage.data.channel;
+    }
+    
+    // Add team_id if needed
+    if (parsedMessage.data.team_id && !slackPayload.team_id) {
+      slackPayload.team_id = parsedMessage.data.team_id;
+    }
+    
+    // Ensure event has a channel for Slack trigger
+    if (slackPayload.event && !slackPayload.event.channel) {
+      slackPayload.event.channel = 'extracted-channel';
+    }
+    
+    return slackPayload;
+  } catch (error) {
+    logger.error('Failed to extract Slack payload from SNS:', error);
+    return null;
+  }
+}
+
+/**
  * Forward webhook to n8n
  * @param {Object} options - Forwarding options
  * @param {Object} options.data - Webhook data
@@ -285,7 +339,28 @@ export async function forwardToN8n({ data, id, source }) {
       };
     }
     
-    // Detect webhook source if not provided
+    // Check for SNS message format first
+    let isSnsFormat = false;
+    let extractedPayload = null;
+    
+    if (data.Message && typeof data.Message === 'string') {
+      // Try to extract Slack payload from SNS
+      extractedPayload = extractSlackFromSNS(data);
+      if (extractedPayload) {
+        isSnsFormat = true;
+        // Override the source
+        source = 'slack';
+        
+        logger.info(`[${trackingId}] N8N FORWARD - EXTRACTED SLACK FROM SNS`, {
+          hasEvent: !!extractedPayload.event,
+          eventType: extractedPayload.event?.type,
+          channel: extractedPayload.event?.channel,
+          teamId: extractedPayload.team_id
+        });
+      }
+    }
+    
+    // Detect webhook source if not provided and not already determined from SNS
     let webhookSource = source ? { source } : detectWebhookSource(data);
     
     // Ensure we have a source property even if directly passing source as string
@@ -295,40 +370,6 @@ export async function forwardToN8n({ data, id, source }) {
 
     // Mark webhook as processed to prevent duplicates
     markWebhookProcessed(webhookId);
-    
-    logger.debug(`[${trackingId}] N8N FORWARD - SOURCE DETECTION RESULT`, {
-      source: webhookSource.source,
-      dataType: webhookSource.dataType,
-      dataKeys: webhookSource.dataKeys || [],
-      isSNS: webhookSource.isSNS || false,
-      hasEvent: webhookSource.hasEvent || false,
-      isManualMessage: webhookSource.isManualMessage || false
-    });
-    
-    // Check specifically for Slack messages from users
-    let isSlackUserMessage = false;
-    if (webhookSource.source === 'slack') {
-      isSlackUserMessage = 
-        // Direct check of event data
-        (data.event?.type === 'message' && !data.event?.bot_id && data.event?.user) ||
-        // Check for our manual flag
-        data.manual_message === true || 
-        data._isUserMessage === true ||
-        // Check if explicitly marked
-        webhookSource.isManualMessage === true;
-      
-      if (isSlackUserMessage) {
-        logger.info(`[${trackingId}] N8N FORWARD - DETECTED MANUAL SLACK MESSAGE`, {
-          user: data.event?.user,
-          channel: data.event?.channel,
-          text: data.event?.text?.substring(0, 100),
-          ts: data.event?.ts,
-          teamId: data.team_id,
-          apiAppId: data.api_app_id,
-          webhookId
-        });
-      }
-    }
     
     // Determine n8n webhook URL based on source
     let n8nWebhookUrl = '';
@@ -364,8 +405,7 @@ export async function forwardToN8n({ data, id, source }) {
       logger.info(`[${trackingId}] N8N FORWARD - USING SLACK WEBHOOK URL`, {
         n8nWebhookUrl,
         webhookId,
-        nodeEnv,
-        isUserMessage: isSlackUserMessage
+        nodeEnv
       });
     } 
     // Use specific URL for calendly
@@ -390,45 +430,27 @@ export async function forwardToN8n({ data, id, source }) {
     }
     
     // Determine what payload to send
-    let payloadToSend = data;
+    let payloadToSend = isSnsFormat ? extractedPayload : data;
     
-    // Handle potential SNS nested data structures
-    if (data.data && typeof data.data === 'object' && webhookSource.source) {
-      if (webhookSource.source === 'slack' && data.data.payload?.original) {
-        // For Slack, send the original payload
-        payloadToSend = data.data.payload.original;
-        logger.debug(`[${trackingId}] N8N FORWARD - EXTRACTED SLACK PAYLOAD FROM SNS`, {
-          originalKeys: Object.keys(data.data.payload.original),
-          payloadPreview: JSON.stringify(data.data.payload.original).substring(0, 300)
-        });
-      } else if (webhookSource.source === 'calendly' && data.data.payload?.original) {
-        // For Calendly, send the original payload
-        payloadToSend = data.data.payload.original;
-        logger.debug(`[${trackingId}] N8N FORWARD - EXTRACTED CALENDLY PAYLOAD FROM SNS`);
-      }
-    }
-    
-    // Handle Message field (SNS format)
-    if (data.Message && typeof data.Message === 'string' && webhookSource.source) {
-      try {
-        const parsedMessage = JSON.parse(data.Message);
-        if (parsedMessage.data?.payload?.original) {
-          payloadToSend = parsedMessage.data.payload.original;
-          logger.debug(`[${trackingId}] N8N FORWARD - EXTRACTED PAYLOAD FROM SNS MESSAGE FIELD`, {
-            source: webhookSource.source,
-            payloadKeys: Object.keys(parsedMessage.data.payload.original)
-          });
-        }
-      } catch (error) {
-        logger.error(`[${trackingId}] N8N FORWARD - FAILED TO EXTRACT PAYLOAD FROM SNS`, { 
-          error: error.message,
-          webhookSource: webhookSource.source
-        });
-      }
-    }
-    
-    // For Slack, improve the payload to help n8n recognize it
+    // Check specifically for Slack messages from users
+    let isSlackUserMessage = false;
     if (webhookSource.source === 'slack') {
+      isSlackUserMessage = 
+        // Direct check of event data
+        (payloadToSend.event?.type === 'message' && !payloadToSend.event?.bot_id && payloadToSend.event?.user) ||
+        // Check for our manual flag
+        payloadToSend.manual_message === true || 
+        payloadToSend._isUserMessage === true;
+      
+      if (isSlackUserMessage) {
+        logger.info(`[${trackingId}] N8N FORWARD - DETECTED MANUAL SLACK MESSAGE`, {
+          user: payloadToSend.event?.user,
+          channel: payloadToSend.event?.channel,
+          text: payloadToSend.event?.text?.substring(0, 100)
+        });
+      }
+      
+      // For Slack, improve the payload to help n8n recognize it
       // Add special flags to help n8n detect this correctly
       payloadToSend = {
         ...payloadToSend,
@@ -466,7 +488,8 @@ export async function forwardToN8n({ data, id, source }) {
         isUserMessage: isSlackUserMessage,
         team: payloadToSend.team_id,
         apiAppId: payloadToSend.api_app_id,
-        channel: payloadToSend.event?.channel
+        channel: payloadToSend.event?.channel,
+        fromSns: isSnsFormat
       });
     }
     
@@ -476,19 +499,8 @@ export async function forwardToN8n({ data, id, source }) {
       source: webhookSource.source || 'unknown',
       environment: process.env.NODE_ENV || 'development',
       dataSize: JSON.stringify(payloadToSend).length,
-      isSlackUserMessage
-    });
-    
-    // Debug full configuration
-    logger.debug(`[${trackingId}] N8N FORWARD - FULL CONFIG`, {
-      n8nWebhookUrl,
-      webhookSource: webhookSource.source,
-      n8nWebhookUrlFromEnv: env.n8n.webhookUrl,
-      n8nWebhookUrlDev: env.n8n.webhookUrlDev,
-      slackWebhookUrl: env.n8n.slack.webhookUrl,
-      calendlyWebhookUrl: env.n8n.calendly.webhookUrl,
-      nodeEnv: process.env.NODE_ENV,
-      isDocker: !!process.env.DOCKER
+      isSlackUserMessage,
+      fromSns: isSnsFormat
     });
     
     // Setup headers for forwarding
@@ -498,7 +510,8 @@ export async function forwardToN8n({ data, id, source }) {
       'X-Webhook-Source': 'proxy-service',
       'X-Webhook-Type': webhookSource.source || 'unknown',
       'X-Webhook-ID': webhookId,
-      'X-Tracking-ID': trackingId
+      'X-Tracking-ID': trackingId,
+      'X-SNS-Extracted': isSnsFormat ? 'true' : 'false'
     };
     
     // Add special headers for Slack
@@ -518,9 +531,7 @@ export async function forwardToN8n({ data, id, source }) {
       });
     }
     
-    // Forward to n8n
-    const startTime = Date.now();
-    
+    // Log request details
     logger.debug(`[${trackingId}] N8N FORWARD - REQUEST DETAILS`, {
       url: n8nWebhookUrl,
       headers: JSON.stringify(headers),
@@ -528,36 +539,50 @@ export async function forwardToN8n({ data, id, source }) {
       payloadPreview: JSON.stringify(payloadToSend).substring(0, 300)
     });
     
-    const response = await axios.post(n8nWebhookUrl, payloadToSend, {
-      headers,
-      timeout: env.n8n.timeout
-    });
+    // Forward to n8n
+    const startTime = Date.now();
     
-    const responseTime = Date.now() - startTime;
-    
-    // Log successful response
-    logger.info(`[${trackingId}] N8N FORWARD - SUCCESS`, {
-      statusCode: response.status,
-      webhookId,
-      source: webhookSource.source || 'unknown',
-      responseData: JSON.stringify(response.data),
-      responseTime: `${responseTime}ms`,
-      isSlackUserMessage
-    });
-    
-    return { 
-      success: true, 
-      statusCode: response.status, 
-      response: response.data,
-      webhookId,
-      trackingId,
-      responseTime
-    };
+    try {
+      const response = await axios.post(n8nWebhookUrl, payloadToSend, {
+        headers,
+        timeout: env.n8n.timeout
+      });
+      
+      const responseTime = Date.now() - startTime;
+      
+      // Log successful response
+      logger.info(`[${trackingId}] N8N FORWARD - SUCCESS`, {
+        statusCode: response.status,
+        webhookId,
+        source: webhookSource.source || 'unknown',
+        responseData: JSON.stringify(response.data),
+        responseTime: `${responseTime}ms`,
+        isSlackUserMessage,
+        fromSns: isSnsFormat
+      });
+      
+      return { 
+        success: true, 
+        statusCode: response.status, 
+        response: response.data,
+        webhookId,
+        trackingId,
+        responseTime
+      };
+    } catch (error) {
+      logger.error(`[${trackingId}] N8N FORWARD - ERROR FORWARDING TO N8N`, {
+        error: error.message,
+        status: error.response?.status,
+        data: error.response?.data ? JSON.stringify(error.response?.data) : null,
+        webhookSource: webhookSource.source,
+        fromSns: isSnsFormat
+      });
+      
+      throw error;
+    }
   } catch (error) {
-    logger.error(`[${trackingId}] N8N FORWARD - ERROR`, {
+    logger.error(`[${trackingId}] N8N FORWARD - UNRECOVERABLE ERROR`, {
       error: error.message,
-      status: error.response?.status,
-      data: error.response?.data ? JSON.stringify(error.response?.data) : null,
       stack: error.stack
     });
     

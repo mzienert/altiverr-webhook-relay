@@ -138,3 +138,7 @@ dist
 
 /JWT
 
+# Client build files
+proxy/public/assets/
+proxy/public/index.html
+

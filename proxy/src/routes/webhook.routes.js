@@ -8,6 +8,30 @@ import { forwardToN8n } from '../services/n8n.service.js';
 
 const router = express.Router();
 
+// Shared cache for webhook deduplication across all endpoints
+const processedWebhooks = new Map();
+const WEBHOOK_EXPIRY_TIME = 30 * 60 * 1000; // 30 minutes
+
+// Cleanup function to prevent memory leaks
+function cleanupProcessedWebhooks() {
+  const now = Date.now();
+  let cleanupCount = 0;
+  
+  processedWebhooks.forEach((timestamp, id) => {
+    if (now - timestamp > WEBHOOK_EXPIRY_TIME) {
+      processedWebhooks.delete(id);
+      cleanupCount++;
+    }
+  });
+  
+  if (cleanupCount > 0) {
+    logger.debug(`Cleaned up ${cleanupCount} expired webhook entries`);
+  }
+}
+
+// Run cleanup periodically
+setInterval(cleanupProcessedWebhooks, 15 * 60 * 1000); // Every 15 minutes
+
 // SNS message handler - AWS expects this path
 router.post('/sns', snsController.handleSnsMessage);
 
@@ -21,77 +45,136 @@ router.post('/api/webhook/slack', snsController.handleSnsMessage);
 // This endpoint will bypass SNS and go straight to n8n
 router.post('/direct/slack', async (req, res) => {
   try {
-    logger.info('Received webhook on direct Slack endpoint', {
+    const reqId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    
+    logger.info(`[${reqId}] Received webhook on direct Slack endpoint`, {
       body: JSON.stringify(req.body).substring(0, 200),
       headers: req.headers,
     });
     
+    // Check if running in production mode
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if (isProduction) {
+      // In production mode, skip direct Slack webhook processing to avoid duplication
+      // as the webhook will be received via SNS with proper deduplication
+      logger.info(`[${reqId}] SKIPPING DIRECT SLACK ENDPOINT IN PRODUCTION MODE - USING SNS PATH ONLY`, {
+        environment: process.env.NODE_ENV || 'production'
+      });
+      
+      // For verification challenges, we need to send the challenge back
+      if (req.body?.type === 'url_verification' && req.body?.challenge) {
+        logger.info(`[${reqId}] RESPONDING TO SLACK URL VERIFICATION CHALLENGE`);
+        return res.status(200).json({
+          challenge: req.body.challenge
+        });
+      }
+      
+      // Return 200 immediately so Slack doesn't retry
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received, but not processed directly in production. Using SNS path only.',
+        mode: 'production'
+      });
+    }
+    
     // Use the Slack webhook ID from environment
     const webhookId = env.n8n.slack.webhookId || '09210404-b3f7-48c7-9cd2-07f922bc4b14';
     
-    // Generate a stable webhook ID
-    const messageId = `slack_manual_${req.body.event?.channel || 'channel'}_${req.body.event?.ts || Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    // Generate a stable ID for the webhook
+    let stableMessageId;
     
-    // Construct the full URL to n8n - make sure we're using the correct format
-    // Always use the webhook ID pattern for Slack
-    const n8nUrl = `http://localhost:5678/webhook/${webhookId}/webhook`;
-    
-    logger.info(`Directly forwarding manual Slack message to n8n: ${n8nUrl}`, {
-      messageId,
-      eventType: req.body.event?.type || 'unknown',
-      channel: req.body.event?.channel || 'unknown',
-    });
-    
-    // Ensure the payload has the expected structure for n8n Slack trigger
-    const payloadToSend = { ...req.body };
-    
-    // Make sure the event has a channel property which n8n Slack trigger requires
-    if (payloadToSend.event && !payloadToSend.event.channel && payloadToSend.event.type === 'message') {
-      // Try to get channel from different locations in the payload
-      if (payloadToSend.channel_id) {
-        payloadToSend.event.channel = payloadToSend.channel_id;
-      } else if (payloadToSend.channel) {
-        payloadToSend.event.channel = payloadToSend.channel;
-      } else {
-        // Provide fallback value to prevent undefined error
-        payloadToSend.event.channel = 'unknown-channel';
-      }
+    // Handle different event types
+    if (req.body?.event?.type === 'message') {
+      // Check for message_changed events
+      const isMessageChanged = req.body?.event?.subtype === 'message_changed';
+      const originalTs = isMessageChanged ? 
+        req.body?.event?.message?.ts || req.body?.event?.previous_message?.ts : 
+        req.body?.event?.ts;
+        
+      stableMessageId = `slack_msg_${req.body?.team_id || ''}_${req.body?.event?.channel || ''}_${originalTs}`;
+    } else {
+      stableMessageId = req.body?.event_id ? 
+        `slack_evt_${req.body.event_id}` : 
+        `slack_msg_${req.body?.team_id || ''}_${req.body?.event?.channel || ''}_${req.body?.event?.ts || Date.now()}`;
     }
     
-    // Always ensure event object exists with at least a channel property
-    if (!payloadToSend.event) {
-      payloadToSend.event = {
-        type: 'message',
-        channel: 'unknown-channel'
-      };
+    // Check if this is a duplicate
+    if (processedWebhooks.has(stableMessageId)) {
+      logger.info(`[${reqId}] Skipping duplicate Slack webhook on direct endpoint`, {
+        stableMessageId,
+        processingTime: 0
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Event already processed',
+        id: stableMessageId,
+        duplicate: true
+      });
     }
     
-    // Forward with Slack-specific headers that n8n expects
-    const response = await axios.post(n8nUrl, payloadToSend, {
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Slackbot',
-        'X-Webhook-Source': 'manual-slack-message',
+    // Mark as processed
+    processedWebhooks.set(stableMessageId, Date.now());
+    
+    try {
+      // For production, use the production URL pattern
+      let webhookUrl = `http://localhost:5678/webhook/${webhookId}/webhook`;
+      
+      // Add unique ID to the URL query string to force n8n to treat this as unique
+      const uniqueId = stableMessageId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+      
+      // Append the unique ID as a query parameter to the webhook URL
+      webhookUrl = webhookUrl.includes('?') 
+        ? `${webhookUrl}&_uid=${uniqueId}` 
+        : `${webhookUrl}?_uid=${uniqueId}`;
+      
+      logger.info(`[${reqId}] Forwarding to n8n on direct Slack endpoint`, {
+        webhookUrl,
+        stableMessageId
+      });
+      
+      // Forward the payload to n8n, preserving all original headers that might be important
+      const forwardHeaders = {
+        'Content-Type': req.headers['content-type'] || 'application/json',
+        'User-Agent': req.headers['user-agent'] || 'Altiverr-Webhook-Relay',
+        'X-Webhook-Source': 'proxy-service',
         'X-Webhook-Type': 'slack',
-        'X-Slack-Channel': req.body.event?.channel || '',
-        'X-Slack-Team': req.body.team_id || '',
-        'X-Manual-Message': 'true',
-        'X-N8N-Special': 'true',
-      }
-    });
-    
-    logger.info('Successfully forwarded manual Slack message to n8n', {
-      statusCode: response.status,
-      responseData: response.data,
-      messageId
-    });
-    
-    return res.status(200).json({
-      success: true,
-      message: 'Message received and forwarded to n8n',
-      id: messageId,
-      forwardedTo: n8nUrl
-    });
+        'X-Slack-Channel': req.body?.event?.channel || '',
+        'X-Slack-Team': req.body?.team_id || '',
+        'X-Slack-Event-Type': req.body?.event?.type || '',
+        'X-Deduplication-ID': stableMessageId,
+        'X-Request-ID': reqId
+      };
+      
+      const response = await axios.post(webhookUrl, req.body, {
+        headers: forwardHeaders
+      });
+      
+      logger.info(`[${reqId}] Successfully forwarded manual Slack message to n8n`, {
+        statusCode: response.status,
+        responseData: response.data,
+        messageId: stableMessageId
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Message received and forwarded to n8n',
+        id: stableMessageId,
+        forwardedTo: webhookUrl
+      });
+    } catch (error) {
+      logger.error('Failed to forward manual Slack message to n8n', {
+        error: error.message,
+        stack: error.stack
+      });
+      
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+        message: 'Error forwarding message to n8n'
+      });
+    }
   } catch (error) {
     logger.error('Failed to forward manual Slack message to n8n', {
       error: error.message,
@@ -254,16 +337,73 @@ router.post('/webhook/slack', async (req, res) => {
 
 router.post('/webhook/calendly', async (req, res) => {
   try {
+    const reqId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    
+    logger.info(`[${reqId}] RECEIVED WEBHOOK - CALENDLY ENDPOINT`, {
+      path: req.path,
+      userAgent: req.headers['user-agent'],
+      method: req.method,
+      contentType: req.headers['content-type'],
+      bodyKeys: Object.keys(req.body || {}),
+      bodyPreview: JSON.stringify(req.body).substring(0, 300)
+    });
+    
+    // Check if running in production mode
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if (isProduction) {
+      // In production mode, skip direct Calendly webhook processing to avoid duplication
+      // as the webhook will be received via SNS with proper deduplication
+      logger.info(`[${reqId}] SKIPPING DIRECT CALENDLY WEBHOOK IN PRODUCTION MODE - USING SNS PATH ONLY`, {
+        environment: process.env.NODE_ENV || 'production'
+      });
+      
+      // Return 200 immediately so Calendly doesn't retry
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received, but not processed directly in production. Using SNS path only.',
+        mode: 'production'
+      });
+    }
+    
+    const calendlyEventId = req.body?.payload?.uri || 
+                          req.body?.payload?.invitee?.uri ||
+                          `calendly_${Date.now()}`;
+                          
+    // Generate a stable ID for deduplication
+    const stableEventId = `calendly_${calendlyEventId.split('/').pop()}`;
+    
+    // Check if this is a duplicate event
+    if (processedWebhooks.has(stableEventId)) {
+      logger.info('Received duplicate Calendly webhook, skipping', {
+        stableEventId,
+        path: req.path,
+        receivedAt: new Date().toISOString()
+      });
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Event already processed',
+        id: stableEventId,
+        duplicate: true
+      });
+    }
+    
+    // Mark as processed to prevent duplicates
+    processedWebhooks.set(stableEventId, Date.now());
+    
     logger.info('Received webhook on direct Calendly endpoint', {
       path: req.path,
-      userAgent: req.headers['user-agent']
+      userAgent: req.headers['user-agent'],
+      eventId: stableEventId
     });
     
     // Use source-specific webhook URL
     const webhookUrl = getWebhookUrl('', 'calendly');
     
     logger.info('Forwarding Calendly webhook directly to n8n', {
-      destination: webhookUrl
+      destination: webhookUrl,
+      eventId: stableEventId
     });
     
     // Forward the payload directly to n8n
@@ -271,19 +411,21 @@ router.post('/webhook/calendly', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'X-Webhook-Source': 'proxy-service',
-        'X-Webhook-Type': 'calendly'
+        'X-Webhook-Type': 'calendly',
+        'X-Deduplication-ID': stableEventId
       }
     });
     
     logger.info('Successfully forwarded Calendly webhook to n8n', {
       statusCode: response.status,
-      responseData: response.data
+      responseData: response.data,
+      eventId: stableEventId
     });
     
     return res.status(200).json({
       success: true,
       message: 'Event received',
-      id: `calendly_${Date.now()}`
+      id: stableEventId
     });
   } catch (error) {
     logger.error('Error forwarding Calendly webhook to n8n', {
@@ -430,6 +572,35 @@ router.post('/webhook/:uuid/webhook', async (req, res) => {
       bodyEventType: req.body?.event?.type
     });
     
+    // Check if running in production mode and if this is a Slack webhook
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if ((isSlack || isSlackWebhookId) && isProduction) {
+      // In production mode, skip direct Slack webhook processing to avoid duplication
+      // as the webhook will be received via SNS with proper deduplication
+      logger.info(`[${reqId}] SKIPPING DIRECT SLACK WEBHOOK IN PRODUCTION MODE - USING SNS PATH ONLY`, {
+        uuid: req.params.uuid,
+        isSlack,
+        isSlackWebhookId,
+        environment: process.env.NODE_ENV || 'production'
+      });
+      
+      // For verification challenges, we need to send the challenge back
+      if (req.body?.type === 'url_verification' && req.body?.challenge) {
+        logger.info(`[${reqId}] RESPONDING TO SLACK URL VERIFICATION CHALLENGE`);
+        return res.status(200).json({
+          challenge: req.body.challenge
+        });
+      }
+      
+      // Return 200 immediately so Slack doesn't retry
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received, but not processed directly in production. Using SNS path only.',
+        mode: 'production'
+      });
+    }
+    
     if (isSlack || isSlackWebhookId) {
       // Log detailed information about the incoming webhook
       logger.info(`[${reqId}] DETECTED SLACK WEBHOOK`, {
@@ -461,8 +632,17 @@ router.post('/webhook/:uuid/webhook', async (req, res) => {
                          req.body.event?.user && 
                          req.body.event?.user !== 'U08QPJ1GLS0'; // Replace with your bot user ID
       
-      // More detailed logging for Slack message events
+      // Generate a stable webhook ID for deduplication
+      let stableWebhookId;
+      
+      // SLACK MESSAGE DETAILS logging
       if (req.body?.event?.type === 'message') {
+        // Check for message_changed events and store original ts for deduplication
+        const isMessageChanged = req.body?.event?.subtype === 'message_changed';
+        const originalTs = isMessageChanged ? 
+          req.body?.event?.message?.ts || req.body?.event?.previous_message?.ts : 
+          req.body?.event?.ts;
+        
         logger.info(`[${reqId}] SLACK MESSAGE DETAILS`, {
           subtype: req.body?.event?.subtype || 'none',
           channel_type: req.body?.event?.channel_type,
@@ -477,13 +657,48 @@ router.post('/webhook/:uuid/webhook', async (req, res) => {
           hasBlocks: !!req.body?.event?.blocks,
           blocksCount: req.body?.event?.blocks?.length,
           fullText: req.body?.event?.text,
-          eventTs: req.body?.event?.ts
+          eventTs: req.body?.event?.ts,
+          isMessageChanged,
+          originalTs
+        });
+        
+        // For all message events, use a stable ID based on team, channel and timestamp
+        stableWebhookId = `slack_msg_${req.body?.team_id || ''}_${req.body?.event?.channel || ''}_${originalTs}`;
+        
+        // For message_changed events, log that we're using the original timestamp
+        if (isMessageChanged) {
+          logger.info(`[${reqId}] USING ORIGINAL TS FOR MESSAGE_CHANGED DEDUPLICATION`, {
+            originalTs,
+            newStableId: stableWebhookId
+          });
+        }
+      } else {
+        // For non-message events, use event_id if available, or generate from ts
+        stableWebhookId = req.body?.event_id ? 
+          `slack_evt_${req.body.event_id}` : 
+          `slack_msg_${req.body?.team_id || ''}_${req.body?.event?.channel || ''}_${req.body?.event?.ts || Date.now()}`;
+      }
+      
+      // Check if this webhook has already been processed
+      if (processedWebhooks.has(stableWebhookId)) {
+        logger.info(`[${reqId}] SKIPPING DUPLICATE SLACK WEBHOOK`, {
+          stableWebhookId,
+          eventType: req.body?.event?.type,
+          eventTs: req.body?.event?.ts,
+          processingTime: Date.now() - startTime
+        });
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Event already processed',
+          id: stableWebhookId,
+          duplicate: true
         });
       }
-
-      // Generate stable webhook ID for deduplication
-      const stableWebhookId = `slack_msg_${req.body?.team_id || ''}_${req.body?.event?.channel || ''}_${req.body?.event?.ts || Date.now()}`;
-
+      
+      // Mark as processed to prevent duplicates
+      processedWebhooks.set(stableWebhookId, Date.now());
+      
       // Add metadata to the Slack webhook payload for tracking
       const webhookData = {
         ...req.body,
@@ -510,7 +725,15 @@ router.post('/webhook/:uuid/webhook', async (req, res) => {
       // Try to forward to the n8n webhook for Slack
       try {
         // For production, use the production URL pattern
-        const webhookUrl = `http://localhost:5678/webhook/${req.params.uuid}/webhook`;
+        let webhookUrl = `http://localhost:5678/webhook/${req.params.uuid}/webhook`;
+        
+        // Add unique ID to the URL query string to force n8n to treat this as unique
+        const uniqueId = stableWebhookId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+        
+        // Append the unique ID as a query parameter to the webhook URL
+        webhookUrl = webhookUrl.includes('?') 
+          ? `${webhookUrl}&_uid=${uniqueId}` 
+          : `${webhookUrl}?_uid=${uniqueId}`;
         
         logger.info(`[${reqId}] FORWARDING SLACK WEBHOOK TO N8N`, {
           targetUrl: webhookUrl,
@@ -631,6 +854,18 @@ router.post('/webhook/:uuid/webhook', async (req, res) => {
         let fallbackSucceeded = false;
         let lastFallbackError = null;
         let successfulUrl = null;
+        
+        // Define fallback payload here to fix undefined reference
+        const payloadToSend = {
+          ...req.body,
+          // Add special flag for manual messages
+          manual_message: isUserMessage,
+          // Ensure these fields are set for Slack API compatibility
+          webhook_id: webhookId,
+          channel_id: req.body.event?.channel || '',
+          team_id: req.body.team_id || '',
+          event_type: req.body.event?.type || ''
+        };
         
         for (const fallbackUrl of fallbackUrls) {
           try {
@@ -774,6 +1009,35 @@ router.post('/:uuid/webhook', async (req, res) => {
       bodyEventType: req.body?.event?.type
     });
     
+    // Check if running in production mode and if this is a Slack webhook
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if ((isSlack || isSlackWebhookId) && isProduction) {
+      // In production mode, skip direct Slack webhook processing to avoid duplication
+      // as the webhook will be received via SNS with proper deduplication
+      logger.info(`[${reqId}] SKIPPING DIRECT PATH SLACK WEBHOOK IN PRODUCTION MODE - USING SNS PATH ONLY`, {
+        uuid: req.params.uuid,
+        isSlack,
+        isSlackWebhookId,
+        environment: process.env.NODE_ENV || 'production'
+      });
+      
+      // For verification challenges, we need to send the challenge back
+      if (req.body?.type === 'url_verification' && req.body?.challenge) {
+        logger.info(`[${reqId}] RESPONDING TO SLACK URL VERIFICATION CHALLENGE`);
+        return res.status(200).json({
+          challenge: req.body.challenge
+        });
+      }
+      
+      // Return 200 immediately so Slack doesn't retry
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received, but not processed directly in production. Using SNS path only.',
+        mode: 'production'
+      });
+    }
+    
     if (isSlack || isSlackWebhookId) {
       logger.info(`[${reqId}] DETECTED SLACK WEBHOOK`, {
         uuid: req.params.uuid,
@@ -804,8 +1068,17 @@ router.post('/:uuid/webhook', async (req, res) => {
                          req.body.event?.user && 
                          req.body.event?.user !== 'U08QPJ1GLS0'; // Replace with your bot user ID
       
-      // More detailed logging for Slack message events
+      // Generate a stable webhook ID for deduplication
+      let stableWebhookId;
+      
+      // SLACK MESSAGE DETAILS logging
       if (req.body?.event?.type === 'message') {
+        // Check for message_changed events and store original ts for deduplication
+        const isMessageChanged = req.body?.event?.subtype === 'message_changed';
+        const originalTs = isMessageChanged ? 
+          req.body?.event?.message?.ts || req.body?.event?.previous_message?.ts : 
+          req.body?.event?.ts;
+        
         logger.info(`[${reqId}] SLACK MESSAGE DETAILS`, {
           subtype: req.body?.event?.subtype || 'none',
           channel_type: req.body?.event?.channel_type,
@@ -820,8 +1093,19 @@ router.post('/:uuid/webhook', async (req, res) => {
           hasBlocks: !!req.body?.event?.blocks,
           blocksCount: req.body?.event?.blocks?.length,
           fullText: req.body?.event?.text,
-          eventTs: req.body?.event?.ts
+          eventTs: req.body?.event?.ts,
+          isMessageChanged,
+          originalTs
         });
+        
+        // For message_changed events, use the original message ts in the ID to avoid duplicates
+        if (isMessageChanged) {
+          stableWebhookId = `slack_msg_${req.body?.team_id || ''}_${req.body?.event?.channel || ''}_${originalTs}`;
+          logger.info(`[${reqId}] USING ORIGINAL TS FOR MESSAGE_CHANGED DEDUPLICATION`, {
+            originalTs,
+            newStableId: stableWebhookId
+          });
+        }
       }
       
       // Generate webhook ID for deduplication
@@ -855,8 +1139,16 @@ router.post('/:uuid/webhook', async (req, res) => {
         // For production, use the production URL pattern - with the webhook/ prefix
         const webhookUrl = `http://localhost:5678/webhook/${req.params.uuid}/webhook`;
         
+        // Add unique ID to the URL query string to force n8n to treat this as unique
+        const uniqueId = stableWebhookId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+        
+        // Append the unique ID as a query parameter to the webhook URL
+        const finalUrl = webhookUrl.includes('?') 
+          ? `${webhookUrl}&_uid=${uniqueId}` 
+          : `${webhookUrl}?_uid=${uniqueId}`;
+        
         logger.info(`[${reqId}] FORWARDING SLACK WEBHOOK TO N8N`, {
-          targetUrl: webhookUrl,
+          targetUrl: finalUrl,
           payload: JSON.stringify(req.body).substring(0, 300),
           headers: {
             'Content-Type': req.headers['content-type'],
@@ -918,13 +1210,13 @@ router.post('/:uuid/webhook', async (req, res) => {
         }
         
         logger.info(`[${reqId}] FORWARDING SLACK WEBHOOK - SENDING REQUEST`, {
-          url: webhookUrl,
+          url: finalUrl,
           headers: JSON.stringify(forwardHeaders),
           payloadSize: JSON.stringify(payloadToSend).length,
           payloadPreview: JSON.stringify(payloadToSend).substring(0, 300)
         });
         
-        const response = await axios.post(webhookUrl, payloadToSend, {
+        const response = await axios.post(finalUrl, payloadToSend, {
           headers: forwardHeaders
         });
         
@@ -933,7 +1225,7 @@ router.post('/:uuid/webhook', async (req, res) => {
         logger.info(`[${reqId}] SUCCESSFULLY FORWARDED TO N8N`, {
           statusCode: response.status,
           responseData: JSON.stringify(response.data),
-          webhookUrl,
+          webhookUrl: finalUrl,
           isUserMessage,
           webhookId,
           processingTime: `${processingTime}ms`
@@ -943,7 +1235,7 @@ router.post('/:uuid/webhook', async (req, res) => {
           success: true,
           message: 'Event received and forwarded to n8n production webhook',
           id: webhookId,
-          forwardedTo: webhookUrl,
+          forwardedTo: finalUrl,
           processingTime
         });
       } catch (error) {

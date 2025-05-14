@@ -1,7 +1,7 @@
 import axios from 'axios';
 import env from '../../config/env.js';
 import logger from '../utils/logger.js';
-import { forwardToN8n } from '../services/n8n.service.js';
+import { forwardToN8n, extractSlackFromSNS } from '../services/n8n.service.js';
 import { sendErrorNotification } from '../services/notification.service.js';
 
 // Map to store processed message IDs for idempotency (in-memory cache)
@@ -215,8 +215,47 @@ export async function handleNotification(req, res) {
       throw new Error('Failed to parse SNS message: ' + error.message);
     }
     
+    // Extract the message ID for deduplication
+    let messageId;
+    
+    // For Slack events, use the event ID or timestamp
+    if (parsedMessage.data?.metadata?.source === 'slack') {
+      // Use Slack timestamp for stable IDs
+      const slackTs = parsedMessage.data?.payload?.original?.event?.ts;
+      const teamId = parsedMessage.data?.payload?.original?.team_id || parsedMessage.data?.team_id;
+      const channel = parsedMessage.data?.payload?.original?.event?.channel || parsedMessage.data?.channel;
+      
+      if (slackTs && (teamId || channel)) {
+        messageId = `slack_msg_${teamId || ''}_${channel || ''}_${slackTs}`;
+      } else {
+        messageId = `slack_${parsedMessage.data?.metadata?.id || Date.now()}`;
+      }
+    } 
+    // For Calendly events, use the event URI
+    else if (parsedMessage.data?.metadata?.source === 'calendly') {
+      // Extract Calendly URI from payload 
+      const eventUri = parsedMessage.data?.payload?.original?.payload?.uri ||
+                       parsedMessage.data?.payload?.original?.payload?.invitee?.uri;
+      
+      if (eventUri) {
+        // Extract just the UUID from the URI
+        const eventId = eventUri.split('/').pop();
+        messageId = `calendly_${eventId}`;
+      } else {
+        messageId = `calendly_${parsedMessage.data?.metadata?.id || Date.now()}`;
+      }
+      
+      logger.info(`[${traceId}] CALENDLY EVENT DETECTED IN SNS`, {
+        messageId,
+        eventType: parsedMessage.data?.payload?.original?.event || 'unknown'
+      });
+    }
+    // For other events, use the metadata ID or generate one
+    else {
+      messageId = parsedMessage.data?.metadata?.id || `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    }
+    
     // Check for duplicate messages (idempotency)
-    const messageId = parsedMessage.id || message.MessageId;
     if (hasMessageBeenProcessed(messageId)) {
       logger.info(`[${traceId}] SKIPPING DUPLICATE SNS MESSAGE`, {
         messageId,
@@ -257,6 +296,48 @@ export async function handleNotification(req, res) {
           text: parsedMessage.data?.payload?.original?.event?.text?.substring(0, 100),
           channel: parsedMessage.data?.payload?.original?.event?.channel,
           ts: parsedMessage.data?.payload?.original?.event?.ts
+        });
+      }
+
+      // Try to extract the original Slack payload for n8n
+      const slackPayload = extractSlackFromSNS(message);
+      if (slackPayload) {
+        logger.info(`[${traceId}] EXTRACTED SLACK PAYLOAD FROM SNS`, {
+          eventType: slackPayload.event?.type || slackPayload.type,
+          hasEvent: !!slackPayload.event,
+          hasTeamId: !!slackPayload.team_id
+        });
+        
+        // Forward the extracted Slack payload directly to n8n
+        logger.info(`[${traceId}] FORWARDING SLACK PAYLOAD TO N8N`, {
+          messageId,
+          source: 'slack',
+          isExtractedPayload: true
+        });
+        
+        const result = await forwardToN8n({
+          data: slackPayload,
+          id: messageId,
+          source: 'slack'
+        });
+        
+        // Mark as processed
+        markMessageAsProcessed(messageId);
+        
+        logger.info(`[${traceId}] SUCCESSFULLY PROCESSED SNS NOTIFICATION`, {
+          messageId,
+          result: result.success ? 'success' : 'failure',
+          statusCode: result.statusCode,
+          source: 'slack',
+          isSlackMessage: true,
+          responseTime: result.responseTime
+        });
+        
+        return res.status(200).json({
+          success: result.success,
+          messageId,
+          forwarded: true,
+          traceId
         });
       }
     }

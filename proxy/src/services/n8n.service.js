@@ -14,7 +14,16 @@ const WEBHOOK_EXPIRY_TIME = 30 * 60 * 1000; // Increased to 30 minutes from 5 mi
  */
 function generateConsistentWebhookId(data) {
   // For Slack message events, use team_id + channel + ts for consistent IDs
-  if (data.event?.type === 'message' && data.event?.ts) {
+  if (data.event?.type === 'message') {
+    // For message_changed events, use the original message timestamp to avoid duplicates
+    if (data.event?.subtype === 'message_changed') {
+      const originalTs = data.event?.message?.ts || 
+                         data.event?.previous_message?.ts || 
+                         data.event?.ts;
+      
+      return `slack_msg_${data.team_id || 'team'}_${data.event.channel || 'channel'}_${originalTs}`;
+    }
+    
     return `slack_msg_${data.team_id || 'team'}_${data.event.channel || 'channel'}_${data.event.ts}`;
   }
   
@@ -23,9 +32,31 @@ function generateConsistentWebhookId(data) {
     return `slack_${data.event_id}`;
   }
   
-  // For Calendly events, use the invitee URI or event URI
-  if (data.payload?.uri && data.payload.uri.includes('calendly')) {
-    return `calendly_${data.payload.uri.split('/').pop()}`;
+  // For Calendly events, extract the UUID from the URI
+  if (data.event && (data.event === 'invitee.created' || data.event === 'invitee.canceled')) {
+    const uri = data.payload?.uri || data.payload?.invitee?.uri;
+    if (uri) {
+      return `calendly_${uri.split('/').pop()}`;
+    }
+  }
+  
+  // For SNS messages with Calendly data
+  if (data.Message && typeof data.Message === 'string' && data.Message.includes('calendly')) {
+    try {
+      const parsedMessage = JSON.parse(data.Message);
+      if (parsedMessage.data?.metadata?.source === 'calendly') {
+        const uri = parsedMessage.data?.payload?.original?.payload?.uri || 
+                   parsedMessage.data?.payload?.original?.payload?.invitee?.uri;
+        
+        if (uri) {
+          return `calendly_${uri.split('/').pop()}`;
+        }
+        
+        return `calendly_${parsedMessage.data?.metadata?.id || Date.now()}`;
+      }
+    } catch (e) {
+      // Failed to parse, continue with other ID methods
+    }
   }
   
   // For any data with an explicit ID
@@ -244,6 +275,7 @@ function detectWebhookSource(data) {
  */
 export function extractSlackFromSNS(data) {
   if (!data || !data.Message || typeof data.Message !== 'string') {
+    logger.error('Failed to extract Slack from SNS: Invalid or missing Message field');
     return null;
   }
 
@@ -263,11 +295,24 @@ export function extractSlackFromSNS(data) {
     
     // Check if we have the expected structure for Slack
     if (parsedMessage.data?.metadata?.source !== 'slack' || !parsedMessage.data?.payload?.original) {
+      logger.error('Failed to extract Slack from SNS: Invalid structure', {
+        source: parsedMessage.data?.metadata?.source,
+        hasOriginal: !!parsedMessage.data?.payload?.original,
+        payloadKeys: parsedMessage.data?.payload ? Object.keys(parsedMessage.data.payload) : []
+      });
       return null;
     }
     
     // Extract the Slack payload
     const slackPayload = parsedMessage.data.payload.original;
+    
+    // Log the extracted payload structure 
+    logger.debug('Extracted Slack payload from SNS:', {
+      hasEvent: !!slackPayload.event,
+      eventType: slackPayload.event?.type,
+      hasChannel: !!slackPayload.event?.channel,
+      hasTeamId: !!slackPayload.team_id
+    });
     
     // Add channel from SNS wrapper if needed
     if (parsedMessage.data.channel && slackPayload.event && !slackPayload.event.channel) {
@@ -344,18 +389,63 @@ export async function forwardToN8n({ data, id, source }) {
     let extractedPayload = null;
     
     if (data.Message && typeof data.Message === 'string') {
-      // Try to extract Slack payload from SNS
-      extractedPayload = extractSlackFromSNS(data);
-      if (extractedPayload) {
-        isSnsFormat = true;
-        // Override the source
-        source = 'slack';
+      try {
+        // Try to parse the message
+        const parsedMessage = JSON.parse(data.Message);
         
-        logger.info(`[${trackingId}] N8N FORWARD - EXTRACTED SLACK FROM SNS`, {
-          hasEvent: !!extractedPayload.event,
-          eventType: extractedPayload.event?.type,
-          channel: extractedPayload.event?.channel,
-          teamId: extractedPayload.team_id
+        // Check for our standard SNS wrapper structure
+        if (parsedMessage.data && parsedMessage.data.metadata && parsedMessage.data.payload) {
+          // Check if this is a Slack message
+          if (parsedMessage.data.metadata.source === 'slack') {
+            // Extract the original Slack payload
+            if (parsedMessage.data.payload.original) {
+              extractedPayload = parsedMessage.data.payload.original;
+              isSnsFormat = true;
+              source = 'slack';
+              
+              // If we still don't have event.channel, try to use other fields
+              if (extractedPayload.event && !extractedPayload.event.channel) {
+                // Try to populate from channel in the parent data
+                if (parsedMessage.data.channel) {
+                  extractedPayload.event.channel = parsedMessage.data.channel;
+                }
+              }
+              
+              // Ensure event exists if missing
+              if (!extractedPayload.event && parsedMessage.data.payload.eventType === 'message') {
+                extractedPayload.event = {
+                  type: 'message',
+                  channel: parsedMessage.data.channel || 'unknown',
+                  user: parsedMessage.data.user || 'unknown',
+                  text: parsedMessage.data.text || ''
+                };
+              }
+              
+              logger.info(`[${trackingId}] N8N FORWARD - EXTRACTED SLACK FROM SNS`, {
+                hasEvent: !!extractedPayload.event,
+                eventType: extractedPayload.event?.type,
+                channel: extractedPayload.event?.channel,
+                teamId: extractedPayload.team_id
+              });
+            }
+          }
+          // Check if this is a Calendly message
+          else if (parsedMessage.data.metadata.source === 'calendly') {
+            // Extract the Calendly payload
+            extractedPayload = parsedMessage.data.payload.original || parsedMessage.data.payload;
+            isSnsFormat = true;
+            source = 'calendly';
+            
+            logger.info(`[${trackingId}] N8N FORWARD - EXTRACTED CALENDLY FROM SNS`, {
+              eventType: extractedPayload.event || 'unknown',
+              resourceType: extractedPayload.payload?.resource?.type || 'unknown'
+            });
+          }
+        }
+      } catch (error) {
+        logger.warn(`[${trackingId}] N8N FORWARD - FAILED TO PARSE SNS MESSAGE`, {
+          error: error.message,
+          messagePreview: data.Message.substring(0, 200)
         });
       }
     }
@@ -402,6 +492,14 @@ export async function forwardToN8n({ data, id, source }) {
           : (env.n8n.slack.webhookUrlDev || env.n8n.webhookUrlDev.replace(/\/calendly$/, ''));
       }
       
+      // Add unique ID to the URL query string to force n8n to treat this as unique
+      const uniqueId = webhookId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+      
+      // Append the unique ID as a query parameter to the webhook URL
+      n8nWebhookUrl = n8nWebhookUrl.includes('?') 
+        ? `${n8nWebhookUrl}&_uid=${uniqueId}` 
+        : `${n8nWebhookUrl}?_uid=${uniqueId}`;
+        
       logger.info(`[${trackingId}] N8N FORWARD - USING SLACK WEBHOOK URL`, {
         n8nWebhookUrl,
         webhookId,
@@ -414,6 +512,14 @@ export async function forwardToN8n({ data, id, source }) {
       n8nWebhookUrl = nodeEnv === 'production' 
         ? env.n8n.calendly.webhookUrl || env.n8n.webhookUrl
         : env.n8n.calendly.webhookUrlDev || env.n8n.webhookUrlDev;
+        
+      // Add unique ID to the URL query string to force n8n to treat this as unique
+      const uniqueId = webhookId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+      
+      // Append the unique ID as a query parameter to the webhook URL
+      n8nWebhookUrl = n8nWebhookUrl.includes('?') 
+        ? `${n8nWebhookUrl}&_uid=${uniqueId}` 
+        : `${n8nWebhookUrl}?_uid=${uniqueId}`;
       
       logger.info(`[${trackingId}] N8N FORWARD - USING CALENDLY WEBHOOK URL`, {
         n8nWebhookUrl,
@@ -423,6 +529,15 @@ export async function forwardToN8n({ data, id, source }) {
     // Fallback to generic URL
     else {
       n8nWebhookUrl = getWebhookUrl('', webhookSource.source);
+      
+      // Add unique ID to the URL query string to force n8n to treat this as unique
+      const uniqueId = webhookId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+      
+      // Append the unique ID as a query parameter to the webhook URL
+      n8nWebhookUrl = n8nWebhookUrl.includes('?') 
+        ? `${n8nWebhookUrl}&_uid=${uniqueId}` 
+        : `${n8nWebhookUrl}?_uid=${uniqueId}`;
+      
       logger.info(`[${trackingId}] N8N FORWARD - USING GENERIC WEBHOOK URL`, {
         n8nWebhookUrl,
         source: webhookSource.source
@@ -449,6 +564,11 @@ export async function forwardToN8n({ data, id, source }) {
           text: payloadToSend.event?.text?.substring(0, 100)
         });
       }
+      
+      // Log complete Slack payload for testing/debugging purposes
+      logger.info(`[${trackingId}] N8N FORWARD - COMPLETE SLACK PAYLOAD FOR TESTING`, {
+        payload: JSON.stringify(payloadToSend, null, 2)
+      });
       
       // For Slack, improve the payload to help n8n recognize it
       // Add special flags to help n8n detect this correctly
@@ -511,7 +631,8 @@ export async function forwardToN8n({ data, id, source }) {
       'X-Webhook-Type': webhookSource.source || 'unknown',
       'X-Webhook-ID': webhookId,
       'X-Tracking-ID': trackingId,
-      'X-SNS-Extracted': isSnsFormat ? 'true' : 'false'
+      'X-SNS-Extracted': isSnsFormat ? 'true' : 'false',
+      'X-Deduplication-ID': webhookId
     };
     
     // Add special headers for Slack
@@ -520,6 +641,15 @@ export async function forwardToN8n({ data, id, source }) {
       headers['X-Slack-Channel'] = payloadToSend.event?.channel || '';
       headers['X-Slack-Team'] = payloadToSend.team_id || '';
       headers['X-Slack-Event-Type'] = payloadToSend.event?.type || '';
+      headers['X-Slack-Event-TS'] = payloadToSend.event?.ts || '';
+      
+      // For message_changed events, add the original ts
+      if (payloadToSend.event?.subtype === 'message_changed') {
+        const originalTs = payloadToSend.event?.message?.ts || 
+                           payloadToSend.event?.previous_message?.ts || 
+                           payloadToSend.event?.ts;
+        headers['X-Slack-Original-TS'] = originalTs;
+      }
       
       // If we have a Slackbot user agent, keep it
       if (payloadToSend.event?.type === 'message') {
@@ -529,6 +659,20 @@ export async function forwardToN8n({ data, id, source }) {
       logger.debug(`[${trackingId}] N8N FORWARD - SLACK HEADERS`, {
         headers: JSON.stringify(headers)
       });
+    }
+    
+    // For Calendly events, add event-specific headers
+    if (webhookSource.source === 'calendly') {
+      headers['X-Calendly-Event-Type'] = payloadToSend.event || '';
+      
+      // Add URI if available for better tracing
+      if (payloadToSend.payload?.uri) {
+        const eventId = payloadToSend.payload.uri.split('/').pop();
+        headers['X-Calendly-Event-ID'] = eventId;
+      } else if (payloadToSend.payload?.invitee?.uri) {
+        const inviteeId = payloadToSend.payload.invitee.uri.split('/').pop();
+        headers['X-Calendly-Invitee-ID'] = inviteeId;
+      }
     }
     
     // Log request details
@@ -591,5 +735,6 @@ export async function forwardToN8n({ data, id, source }) {
 }
 
 export default {
-  forwardToN8n
+  forwardToN8n,
+  extractSlackFromSNS
 }; 

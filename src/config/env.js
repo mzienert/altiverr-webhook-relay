@@ -37,17 +37,17 @@ const env = {
     clientSecret: process.env.SLACK_CLIENT_SECRET
   },
   n8n: {
-    webhookUrl: process.env.N8N_WEBHOOK_URL || 'https://webhook-proxy.altiverr.com/webhook',
-    webhookUrlDev: process.env.N8N_WEBHOOK_URL_DEV || 'https://webhook-proxy.altiverr.com/webhook-test',
+    webhookUrl: process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook',
+    webhookUrlDev: process.env.N8N_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test',
     timeout: process.env.N8N_TIMEOUT ? parseInt(process.env.N8N_TIMEOUT, 10) : 10000,
     slack: {
       webhookId: process.env.N8N_SLACK_WEBHOOK_ID || '09210404-b3f7-48c7-9cd2-07f922bc4b14',
-      webhookUrl: process.env.N8N_SLACK_WEBHOOK_URL || 'https://webhook-proxy.altiverr.com/webhook/09210404-b3f7-48c7-9cd2-07f922bc4b14/webhook',
-      webhookUrlDev: process.env.N8N_SLACK_WEBHOOK_URL_DEV || 'https://webhook-proxy.altiverr.com/webhook-test/09210404-b3f7-48c7-9cd2-07f922bc4b14/webhook'
+      webhookUrl: process.env.N8N_SLACK_WEBHOOK_URL || 'http://localhost:5678/webhook/09210404-b3f7-48c7-9cd2-07f922bc4b14/webhook',
+      webhookUrlDev: process.env.N8N_SLACK_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/09210404-b3f7-48c7-9cd2-07f922bc4b14/webhook'
     },
     calendly: {
-      webhookUrl: process.env.N8N_CALENDLY_WEBHOOK_URL || 'https://webhook-proxy.altiverr.com/webhook/calendly',
-      webhookUrlDev: process.env.N8N_CALENDLY_WEBHOOK_URL_DEV || 'https://webhook-proxy.altiverr.com/webhook-test/calendly'
+      webhookUrl: process.env.N8N_CALENDLY_WEBHOOK_URL || 'http://localhost:5678/webhook/calendly',
+      webhookUrlDev: process.env.N8N_CALENDLY_WEBHOOK_URL_DEV || 'http://localhost:5678/webhook-test/calendly'
     }
   },
   server: {

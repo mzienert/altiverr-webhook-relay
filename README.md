@@ -394,3 +394,32 @@ If you're experiencing webhook routing issues between Slack and Calendly, follow
    ```
    Webhook type detected: slack|calendly|unknown
    ```
+
+## Proxy Monitor UI
+
+A local-only UI for monitoring the proxy is included in this project. The UI is designed for local use only and is not deployed to Vercel along with the API.
+
+### Features
+
+- Real-time proxy status monitoring
+- Live log viewer with filtering capabilities
+- Configuration viewer
+- Proxy mode switching between development and production
+- Proxy restart functionality
+
+### Running with UI
+
+```bash
+# Build the client and start the proxy
+./start-with-ui.sh
+
+# Access the UI at
+http://localhost:3333/monitor
+```
+
+### Building the UI separately
+
+```bash
+# Just build the UI (without starting the proxy)
+./build-client.sh
+```

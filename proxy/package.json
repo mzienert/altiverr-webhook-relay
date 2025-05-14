@@ -6,22 +6,18 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    
     "# Development scripts": "",
     "dev": "nodemon src/index.js",
     "dev-environment": "scripts/start-dev-environment.sh",
     "tunnel-dev": "scripts/start-tunnel-dev.sh",
-    
     "# Production scripts": "",
     "prod": "scripts/start-production.sh",
     "prod-environment": "scripts/start-production-environment.sh",
     "tunnel": "scripts/start-tunnel.sh",
-    
     "# Service management": "",
     "stop": "scripts/stop-services.sh",
     "restart": "scripts/restart-services.sh",
     "restart-dev": "scripts/restart-services.sh dev",
-    
     "# Testing": "",
     "test-debug": "scripts/test-debug-webhook.sh",
     "test-local": "scripts/test-local-webhook.sh",
@@ -38,6 +34,7 @@
     "helmet": "^7.1.0",
     "http-terminator": "^3.2.0",
     "morgan": "^1.10.0",
+    "socket.io": "^4.8.1",
     "winston": "^3.12.0"
   },
   "devDependencies": {
@@ -48,4 +45,4 @@
   },
   "author": "Matthew Zienert",
   "license": "ISC"
-} 
+}

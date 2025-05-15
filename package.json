@@ -1,16 +1,30 @@
 {
-  "name": "slack-webhook-test-utilities",
+  "name": "altiverr-webhook-relay",
   "version": "1.0.0",
-  "description": "Utilities for testing Slack webhooks with n8n workflows",
+  "description": "A service to relay webhooks from various sources to n8n workflows",
   "type": "module",
+  "main": "src/index.js",
   "scripts": {
-    "test-direct": "node direct-slack-webhook.js",
-    "test-sns": "node sns-slack-webhook.js"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test-direct": "node test/slack/direct-slack-webhook.js",
+    "test-sns": "node test/slack/sns-slack-webhook.js"
   },
   "dependencies": {
-    "axios": "^1.4.0"
+    "aws-sdk": "^2.1363.0", 
+    "axios": "^1.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "helmet": "^6.1.5",
+    "morgan": "^1.10.0",
+    "winston": "^3.8.2",
+    "xss-clean": "^0.1.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=16.0.0"
   }
 }

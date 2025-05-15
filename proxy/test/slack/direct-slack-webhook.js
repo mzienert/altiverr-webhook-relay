@@ -18,7 +18,7 @@ import { randomUUID } from 'crypto';
 // Configuration - adjust as needed
 const config = {
   // Your local webhook service URL
-  webhookUrl: 'http://localhost:3000/webhooks/slack',
+  webhookUrl: 'http://localhost:3333/webhook/slack',
   
   // Slack team and channel info (from your actual Slack workspace)
   teamId: 'T08ME847DE0',

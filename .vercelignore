@@ -1,2 +1,14 @@
 # Ignore client directory for Vercel deployments
-client/ 
+client/
+test/
+proxy/
+logs/
+scripts/
+n8n-backups/
+n8n-backups-new/
+sns-test/
+direct-slack-webhook.js
+sns-slack-webhook.js
+test-sns.js
+build-client.sh
+start-with-ui.sh 

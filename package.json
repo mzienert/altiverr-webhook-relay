@@ -13,11 +13,16 @@
   "dependencies": {
     "aws-sdk": "^2.1363.0", 
     "axios": "^1.4.0",
+    "body-parser": "^1.20.2",
     "cors": "^2.8.5",
+    "crypto": "^1.0.1",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "helmet": "^6.1.5",
+    "http-terminator": "^3.2.0",
     "morgan": "^1.10.0",
+    "socket.io": "^4.6.0",
+    "uuid": "^9.0.0",
     "winston": "^3.8.2",
     "xss-clean": "^0.1.1"
   },

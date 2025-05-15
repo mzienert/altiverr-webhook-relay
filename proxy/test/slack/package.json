@@ -1,0 +1,16 @@
+{
+    "name": "slack-webhook-test-utilities",
+    "version": "1.0.0",
+    "description": "Utilities for testing Slack webhooks with n8n workflows",
+    "type": "module",
+    "scripts": {
+      "test-direct": "node direct-slack-webhook.js",
+      "test-sns": "node sns-slack-webhook.js"
+    },
+    "dependencies": {
+      "axios": "^1.4.0"
+    },
+    "engines": {
+      "node": ">=14.0.0"
+    }
+  }

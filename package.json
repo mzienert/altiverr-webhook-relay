@@ -1,54 +1,16 @@
 {
-  "name": "altiverr-webhook-relay",
+  "name": "slack-webhook-test-utilities",
   "version": "1.0.0",
-  "description": "Event-driven webhook relay service",
-  "homepage": "https://github.com/mzienert/altiverr-webhook-relay#readme",
-  "bugs": {
-    "url": "https://github.com/mzienert/altiverr-webhook-relay/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/mzienert/altiverr-webhook-relay.git"
-  },
-  "license": "ISC",
-  "author": "Matthew Zienert",
+  "description": "Utilities for testing Slack webhooks with n8n workflows",
   "type": "module",
-  "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
-    "dev-explicit": "scripts/start-dev.sh",
-    "dev-environment": "scripts/start-dev-environment.sh",
-    "prod": "PORT=3333 NODE_ENV=production node src/index.js",
-    "tunnel": "scripts/start-tunnel.sh",
-    "tunnel-dev": "scripts/start-tunnel-dev.sh",
-    "stop": "scripts/stop-services.sh",
-    "restart": "scripts/restart-services.sh",
-    "restart-dev": "scripts/restart-services.sh dev",
-    "test-local": "scripts/test-local-webhook.sh",
-    "test-tunnel": "scripts/test-tunnel-webhook.sh",
-    "test-slack": "scripts/test-slack-webhook.sh local slack",
-    "test-calendly": "scripts/test-slack-webhook.sh local calendly",
-    "test-slack-tunnel": "scripts/test-slack-webhook.sh tunnel slack",
-    "test-calendly-tunnel": "scripts/test-slack-webhook.sh tunnel calendly",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build-client": "./build-client.sh",
-    "dev-with-ui": "npm run build-client && npm run dev"
+    "test-direct": "node direct-slack-webhook.js",
+    "test-sns": "node sns-slack-webhook.js"
   },
   "dependencies": {
-    "aws-sdk": "^2.1370.0",
-    "axios": "^1.8.4",
-    "cors": "^2.8.5",
-    "dotenv": "^16.5.0",
-    "express": "^4.18.3",
-    "helmet": "^7.1.0",
-    "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.0",
-    "uuid": "^9.0.1",
-    "winston": "^3.12.0",
-    "xss-clean": "^0.1.4"
+    "axios": "^1.4.0"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
+  "engines": {
+    "node": ">=14.0.0"
   }
 }

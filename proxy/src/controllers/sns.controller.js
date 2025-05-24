@@ -3,6 +3,15 @@ import env from '../../config/env.js';
 import logger from '../utils/logger.js';
 import { forwardToN8n, extractSlackFromSNS } from '../services/n8n.service.js';
 import { sendErrorNotification } from '../services/notification.service.js';
+import responder from '../utils/responder.js';
+
+/**
+ * Generate a unique trace ID for SNS operations
+ * @returns {string} A unique trace ID
+ */
+function generateTraceId() {
+  return `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
 
 /**
  * Verify SNS message signature
@@ -74,9 +83,7 @@ export async function handleSubscriptionConfirmation(req, res) {
         received: message.TopicArn
       });
       
-      return res.status(400).json({
-        error: 'Topic ARN mismatch'
-      });
+      return responder.error(res, 400, 'Topic ARN mismatch');
     }
     
     // Confirm the subscription by visiting the SubscribeURL
@@ -87,10 +94,7 @@ export async function handleSubscriptionConfirmation(req, res) {
       topicArn: message.TopicArn
     });
     
-    return res.status(200).json({
-      message: 'Subscription confirmed successfully',
-      topicArn: message.TopicArn
-    });
+    return responder.success(res, 200, { topicArn: message.TopicArn }, 'Subscription confirmed successfully');
   } catch (error) {
     logger.error('Error confirming SNS subscription', { error: error.message });
     
@@ -100,10 +104,7 @@ export async function handleSubscriptionConfirmation(req, res) {
       stack: error.stack
     });
     
-    return res.status(500).json({
-      error: 'Failed to confirm subscription',
-      message: error.message
-    });
+    return responder.error(res, 500, 'Failed to confirm subscription', { originalError: error.message });
   }
 }
 
@@ -113,7 +114,7 @@ export async function handleSubscriptionConfirmation(req, res) {
  * @param {Object} res - Express response
  */
 export async function handleNotification(req, res) {
-  const traceId = `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const traceId = generateTraceId();
   
   try {
     const message = req.body;
@@ -143,10 +144,7 @@ export async function handleNotification(req, res) {
         hasCertUrl: !!message.SigningCertURL
       });
       
-      return res.status(400).json({
-        error: 'Invalid SNS message signature',
-        traceId
-      });
+      return responder.error(res, 400, 'Invalid SNS message signature', { traceId });
     }
     
     let parsedMessage;
@@ -207,7 +205,7 @@ export async function handleNotification(req, res) {
     }
     // For other events, use the metadata ID or generate one
     else {
-      messageId = parsedMessage.data?.metadata?.id || `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      messageId = parsedMessage.data?.metadata?.id || generateTraceId();
     }
     
     // Check for Slack-specific messages
@@ -271,7 +269,7 @@ export async function handleNotification(req, res) {
           responseTime: result.responseTime
         });
         
-        return res.status(200).json({
+        return responder.success(res, 200, {
           success: result.success,
           messageId,
           forwarded: true,
@@ -303,7 +301,7 @@ export async function handleNotification(req, res) {
       responseTime: result.responseTime
     });
     
-    return res.status(200).json({
+    return responder.success(res, 200, {
       success: result.success,
       messageId,
       forwarded: true,
@@ -322,9 +320,8 @@ export async function handleNotification(req, res) {
       traceId
     });
     
-    return res.status(500).json({
-      error: 'Failed to process notification',
-      message: error.message,
+    return responder.error(res, 500, 'Failed to process notification', { 
+      originalError: error.message,
       traceId
     });
   }
@@ -343,16 +340,11 @@ export async function handleUnsubscribeConfirmation(req, res) {
       topicArn: message.TopicArn
     });
     
-    return res.status(200).json({
-      message: 'Unsubscribe request acknowledged'
-    });
+    return responder.success(res, 200, {}, 'Unsubscribe request acknowledged');
   } catch (error) {
     logger.error('Error handling unsubscribe confirmation', { error: error.message });
     
-    return res.status(500).json({
-      error: 'Failed to handle unsubscribe confirmation',
-      message: error.message
-    });
+    return responder.error(res, 500, 'Failed to handle unsubscribe confirmation', { originalError: error.message });
   }
 }
 
@@ -363,7 +355,7 @@ export async function handleUnsubscribeConfirmation(req, res) {
  * @param {Object} res - Express response
  */
 export async function handleSnsMessage(req, res) {
-  const traceId = `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const traceId = generateTraceId();
   const startTime = Date.now();
   
   try {
@@ -503,12 +495,10 @@ export async function handleSnsMessage(req, res) {
           processingTime: `${processingTime}ms`
         });
         
-        return res.status(200).json({
-          success: true,
-          message: 'Direct Slack webhook processed',
+        return responder.success(res, 200, {
           traceId,
           processingTime
-        });
+        }, 'Direct Slack webhook processed');
       }
       
       // Special detection for Calendly webhooks
@@ -536,12 +526,10 @@ export async function handleSnsMessage(req, res) {
           processingTime: `${processingTime}ms`
         });
         
-        return res.status(200).json({
-          success: true,
-          message: 'Direct Calendly webhook processed',
+        return responder.success(res, 200, {
           traceId,
           processingTime
-        });
+        }, 'Direct Calendly webhook processed');
       }
     }
     
@@ -591,8 +579,7 @@ export async function handleSnsMessage(req, res) {
           processingTime: `${processingTime}ms`
         });
         
-        return res.status(400).json({
-          error: 'Unsupported message type',
+        return responder.error(res, 400, 'Unsupported message type', {
           type: messageType || 'unknown',
           traceId,
           processingTime
@@ -607,9 +594,8 @@ export async function handleSnsMessage(req, res) {
       processingTime: `${processingTime}ms`
     });
     
-    return res.status(500).json({
-      error: 'Internal server error',
-      message: error.message,
+    return responder.error(res, 500, 'Internal server error', {
+      originalError: error.message,
       traceId,
       processingTime
     });

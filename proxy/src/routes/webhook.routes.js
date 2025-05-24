@@ -94,11 +94,12 @@ router.post('/webhook/:uuid/webhook', (req, res) => {
   });
 });
 
-router.post('/:uuid/webhook', (req, res) => {
+// Block UUID pattern webhooks (but NOT debug routes)
+// Note: This route must be more specific to avoid capturing debug routes
+router.post(/^\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/webhook$/, (req, res) => {
   logger.warn('Direct UUID webhook blocked', {
-    uuid: req.params.uuid,
-    userAgent: req.headers['user-agent'],
-    path: req.path
+    path: req.path,
+    userAgent: req.headers['user-agent']
   });
   
   // Handle URL verification challenges
@@ -137,9 +138,9 @@ router.get('/webhook/:uuid/webhook', (req, res) => {
   });
 });
 
-router.get('/:uuid/webhook', (req, res) => {
+router.get(/^\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/webhook$/, (req, res) => {
   logger.info('Received verification GET request on direct path', {
-    uuid: req.params.uuid
+    path: req.path
   });
   return res.status(200).json({
     success: true,

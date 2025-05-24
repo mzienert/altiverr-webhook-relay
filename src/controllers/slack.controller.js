@@ -75,10 +75,7 @@ export async function handleSlackWebhook(req, res, next) {
     // Handle GET requests (used by Slack for URL verification)
     if (req.method === 'GET') {
       logger.info('Received Slack URL verification via GET');
-      return res.status(200).json({
-        success: true,
-        message: 'Slack webhook endpoint is active'
-      });
+      return responder.success(res, 200, {}, 'Slack webhook endpoint is active');
     }
     
     logger.info('Received Slack webhook', {
@@ -89,7 +86,7 @@ export async function handleSlackWebhook(req, res, next) {
     // Special handling for Slack URL verification
     if (req.body.type === 'url_verification') {
       logger.info('Received Slack URL verification challenge');
-      return res.status(200).json({ challenge: req.body.challenge });
+      return responder.success(res, 200, { challenge: req.body.challenge });
     }
     
     // Generate a stable event ID for deduplication
@@ -98,11 +95,7 @@ export async function handleSlackWebhook(req, res, next) {
     // Check for duplicates
     if (isEventProcessed(eventId)) {
       logger.info('Received duplicate Slack event, ignoring', { eventId });
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Event already processed',
-        duplicate: true 
-      });
+      return responder.success(res, 200, { duplicate: true }, 'Event already processed');
     }
     
     // Mark as processed BEFORE handling to prevent race conditions
@@ -116,29 +109,31 @@ export async function handleSlackWebhook(req, res, next) {
       return responder.success(res, 200, { id: result.id }, 'Webhook received and processed');
     }
     
-    // For event_callback, acknowledge immediately and process async
-    const responseId = eventId || `slack_${Date.now()}`;
-    res.status(200).json({ 
-      success: true, 
-      message: 'Event received',
-      id: responseId
-    });
-    
-    // Process after response is sent
-    slackService.processSlackWebhook(req.body)
-      .then(result => {
-        logger.info('Async processing completed successfully', { 
-          eventId, 
-          responseId, 
-          messageId: result.id 
-        });
-      })
-      .catch(error => {
-        logger.error('Error in async webhook processing', { 
-          error: error.message, 
-          eventId 
-        });
+    // For event_callback, process synchronously to ensure SNS completes
+    logger.info('Processing Slack event synchronously to ensure SNS delivery');
+    try {
+      const result = await slackService.processSlackWebhook(req.body);
+      logger.info('Synchronous processing completed successfully', { 
+        eventId, 
+        messageId: result.id,
+        snsMessageId: result.snsMessageId
       });
+      
+      return responder.success(res, 200, { 
+        id: result.id,
+        snsMessageId: result.snsMessageId
+      }, 'Event received and processed');
+    } catch (error) {
+      logger.error('Error in synchronous webhook processing', { 
+        error: error.message, 
+        eventId 
+      });
+      
+      return responder.error(res, 500, 'Failed to process webhook', { 
+        originalError: error.message,
+        id: eventId
+      });
+    }
   } catch (error) {
     logger.error('Error processing Slack webhook', { error: error.message });
     next(error);

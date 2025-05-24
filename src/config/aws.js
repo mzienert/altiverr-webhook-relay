@@ -1,16 +1,15 @@
-import AWS from 'aws-sdk';
+import { SNSClient, ListTopicsCommand } from '@aws-sdk/client-sns';
 import env from './env.js';
 import logger from '../utils/logger.js';
 
-// Configure AWS SDK
-AWS.config.update({
+// Create SNS client with AWS SDK v3
+const sns = new SNSClient({
   region: env.aws.region,
-  accessKeyId: env.aws.accessKeyId,
-  secretAccessKey: env.aws.secretAccessKey
+  credentials: {
+    accessKeyId: env.aws.accessKeyId,
+    secretAccessKey: env.aws.secretAccessKey
+  }
 });
-
-// Create SNS instance
-const sns = new AWS.SNS();
 
 // Validate SNS configuration (minimal check)
 async function validateSnsConfig() {
@@ -35,11 +34,12 @@ async function validateSnsConfig() {
     
     // Try to check if we can list topics as a basic validation
     try {
-      const result = await sns.listTopics().promise();
-      const topicExists = result.Topics.some(topic => topic.TopicArn === env.aws.snsTopicArn);
+      const listCommand = new ListTopicsCommand({});
+      const result = await sns.send(listCommand);
+      const topicExists = result.Topics?.some(topic => topic.TopicArn === env.aws.snsTopicArn);
       
       logger.info('SNS topic check:', {
-        topicsFound: result.Topics.length,
+        topicsFound: result.Topics?.length || 0,
         targetTopicFound: topicExists ? 'Yes' : 'No',
         topicArn: env.aws.snsTopicArn
       });

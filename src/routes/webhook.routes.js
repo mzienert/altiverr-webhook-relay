@@ -4,7 +4,7 @@ import slackController from '../controllers/slack.controller.js';
 import { createWebhookAuthMiddleware } from '../middlewares/webhookAuth.js';
 import { verifyCalendlySignature } from '../services/calendly.service.js';
 import { verifySlackSignature } from '../services/slack.service.js';
-import { extractSlackFromSNS } from '../services/n8n.service.js';
+// Removed n8n service import - SNS processing now handled by proxy service only
 import logger from '../utils/logger.js';
 
 const router = express.Router();

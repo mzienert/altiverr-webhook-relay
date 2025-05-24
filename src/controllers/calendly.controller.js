@@ -82,11 +82,7 @@ export async function handleCalendlyWebhook(req, res, next) {
     // Check for duplicates
     if (isEventProcessed(eventId)) {
       logger.info('Received duplicate Calendly event, ignoring', { eventId });
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Event already processed',
-        duplicate: true 
-      });
+      return responder.success(res, 200, { duplicate: true }, 'Event already processed');
     }
     
     // Mark as processed BEFORE handling to prevent race conditions

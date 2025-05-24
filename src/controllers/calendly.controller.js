@@ -1,8 +1,6 @@
 import logger from '../utils/logger.js';
 import calendlyService from '../services/calendly.service.js';
 import responder from '../utils/responder.js';
-import axios from 'axios';
-import env from '../config/env.js';
 
 // Simple in-memory cache for recently processed event IDs
 const processedEvents = new Map();
@@ -94,44 +92,6 @@ export async function handleCalendlyWebhook(req, res, next) {
     // Mark as processed BEFORE handling to prevent race conditions
     if (eventId) {
       markEventProcessed(eventId);
-    }
-    
-    // Always forward directly to n8n in addition to standard processing
-    try {
-      // Use the appropriate webhook URL based on environment
-      const n8nUrl = process.env.NODE_ENV === 'production'  
-        ? (env.n8n?.calendly?.webhookUrl || 'https://webhook-proxy.altiverr.com/webhook/calendly')
-        : (env.n8n?.calendly?.webhookUrlDev || 'https://webhook-proxy.altiverr.com/webhook-test/calendly');
-      
-      logger.info('Forwarding Calendly webhook to n8n', {
-        url: n8nUrl,
-        event: req.body.event,
-        payload: req.body.payload ? 'present' : 'missing'
-      });
-      
-      // Forward with headers
-      const response = await axios.post(n8nUrl, req.body, {
-        headers: {
-          'Content-Type': req.headers['content-type'] || 'application/json',
-          'User-Agent': req.headers['user-agent'] || 'Calendly',
-          'X-Webhook-Source': 'api-service',
-          'X-Webhook-Type': 'calendly',
-          'X-Deduplication-ID': eventId || `calendly_${Date.now()}`
-        }
-      });
-      
-      logger.info('Successfully forwarded Calendly webhook to n8n', {
-        statusCode: response.status,
-        response: response.data,
-        eventId
-      });
-    } catch (forwardError) {
-      logger.error('Failed to forward Calendly webhook to n8n', {
-        error: forwardError.message,
-        stack: forwardError.stack,
-        eventId
-      });
-      // Continue with normal processing even if forwarding fails
     }
     
     // Process the webhook data and publish to SNS

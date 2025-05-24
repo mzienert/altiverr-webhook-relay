@@ -1,8 +1,6 @@
 import logger from '../utils/logger.js';
 import slackService from '../services/slack.service.js';
 import responder from '../utils/responder.js';
-import axios from 'axios';
-import env from '../config/env.js';
 
 // Simple in-memory cache for recently processed event IDs
 // In production, consider using Redis or similar for distributed caching
@@ -110,46 +108,6 @@ export async function handleSlackWebhook(req, res, next) {
     // Mark as processed BEFORE handling to prevent race conditions
     if (eventId) {
       markEventProcessed(eventId);
-    }
-    
-    // Always forward directly to n8n in addition to standard processing
-    try {
-      // Use the Slack webhook ID from env or default
-      const webhookId = env.n8n?.slack?.webhookId || '09210404-b3f7-48c7-9cd2-07f922bc4b14';
-      
-      // Construct the full n8n URL
-      const n8nUrl = `https://webhook-proxy.altiverr.com/webhook/${webhookId}/webhook`;
-      
-      logger.info('Directly forwarding Slack webhook to n8n', {
-        url: n8nUrl,
-        eventType: req.body.type,
-        eventSubtype: req.body.event?.type,
-        eventId
-      });
-      
-      // Forward with headers
-      const response = await axios.post(n8nUrl, req.body, {
-        headers: {
-          'Content-Type': req.headers['content-type'] || 'application/json',
-          'User-Agent': req.headers['user-agent'] || 'Slackbot',
-          'X-Webhook-Source': 'api-service',
-          'X-Webhook-Type': 'slack',
-          'X-Deduplication-ID': eventId || `slack_${Date.now()}`
-        }
-      });
-      
-      logger.info('Successfully forwarded Slack webhook to n8n', {
-        statusCode: response.status,
-        response: response.data,
-        eventId
-      });
-    } catch (forwardError) {
-      logger.error('Failed to forward Slack webhook to n8n', {
-        error: forwardError.message,
-        stack: forwardError.stack,
-        eventId
-      });
-      // Continue with normal processing even if forwarding fails
     }
     
     // For non-event_callback requests, process immediately

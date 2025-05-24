@@ -4,51 +4,6 @@ import logger from '../utils/logger.js';
 import { forwardToN8n, extractSlackFromSNS } from '../services/n8n.service.js';
 import { sendErrorNotification } from '../services/notification.service.js';
 
-// Map to store processed message IDs for idempotency (in-memory cache)
-// In a production environment with multiple instances, consider using Redis
-const processedMessages = new Map();
-
-// Expire entries after 24 hours to prevent memory leaks
-const MESSAGE_EXPIRY_TIME = 24 * 60 * 60 * 1000; // 24 hours
-
-/**
- * Utility to add a message ID to the processed list
- * @param {string} messageId - The message ID to add
- */
-function markMessageAsProcessed(messageId) {
-  if (!messageId) return;
-  
-  processedMessages.set(messageId, {
-    timestamp: Date.now()
-  });
-  
-  // Schedule cleanup of older messages
-  cleanupProcessedMessages();
-}
-
-/**
- * Utility to check if a message has been processed
- * @param {string} messageId - The message ID to check
- * @returns {boolean} Whether the message has been processed
- */
-function hasMessageBeenProcessed(messageId) {
-  if (!messageId) return false;
-  return processedMessages.has(messageId);
-}
-
-/**
- * Clean up old processed message entries
- */
-function cleanupProcessedMessages() {
-  const now = Date.now();
-  
-  processedMessages.forEach((value, key) => {
-    if (now - value.timestamp > MESSAGE_EXPIRY_TIME) {
-      processedMessages.delete(key);
-    }
-  });
-}
-
 /**
  * Verify SNS message signature
  * @param {Object} message - The SNS message
@@ -255,20 +210,6 @@ export async function handleNotification(req, res) {
       messageId = parsedMessage.data?.metadata?.id || `sns_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     }
     
-    // Check for duplicate messages (idempotency)
-    if (hasMessageBeenProcessed(messageId)) {
-      logger.info(`[${traceId}] SKIPPING DUPLICATE SNS MESSAGE`, {
-        messageId,
-        source: parsedMessage.data?.metadata?.source || 'unknown'
-      });
-      
-      return res.status(200).json({
-        message: 'Message already processed',
-        messageId,
-        traceId
-      });
-    }
-    
     // Check for Slack-specific messages
     const isSlackMessage = parsedMessage.data?.metadata?.source === 'slack' || 
                           (parsedMessage.data?.payload?.original?.type === 'event_callback');
@@ -321,9 +262,6 @@ export async function handleNotification(req, res) {
           source: 'slack'
         });
         
-        // Mark as processed
-        markMessageAsProcessed(messageId);
-        
         logger.info(`[${traceId}] SUCCESSFULLY PROCESSED SNS NOTIFICATION`, {
           messageId,
           result: result.success ? 'success' : 'failure',
@@ -355,9 +293,6 @@ export async function handleNotification(req, res) {
       id: messageId,
       source: parsedMessage.data?.metadata?.source
     });
-    
-    // Mark as processed
-    markMessageAsProcessed(messageId);
     
     logger.info(`[${traceId}] SUCCESSFULLY PROCESSED SNS NOTIFICATION`, {
       messageId,

@@ -7,8 +7,12 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test-direct": "node test/slack/direct-slack-webhook.js",
-    "test-sns": "node test/slack/sns-slack-webhook.js"
+    "test-direct": "cd proxy/test/slack && node direct-slack-webhook.js",
+    "test-sns": "cd proxy/test/slack && node sns-slack-webhook.js",
+    "test-msg-changed": "cd proxy/test/slack && node direct-slack-messagechanged.js",
+    "test-sns-msg-changed": "cd proxy/test/slack && node sns-slack-messagechanged.js",
+    "test-lead-not-transferred": "cd proxy/test/slack && node direct-slack-lead-updated-not-transferred.js",
+    "test-sns-lead-not-transferred": "cd proxy/test/slack && node sns-slack-lead-updated-not-transferred.js"
   },
   "dependencies": {
     "aws-sdk": "^2.1363.0", 
@@ -21,7 +25,7 @@
     "helmet": "^6.1.5",
     "http-terminator": "^3.2.0",
     "morgan": "^1.10.0",
-    "socket.io": "^4.6.0",
+    "socket.io": "^4.6.1",
     "uuid": "^9.0.0",
     "winston": "^3.8.2",
     "xss-clean": "^0.1.1"

@@ -1,11 +1,12 @@
 import express from 'express';
 import webhookRoutes from './webhook.routes.js';
+import responder from '../utils/responder.js';
 
 const router = express.Router();
 
 // API information route
 router.get('/', (req, res) => {
-  res.status(200).json({
+  responder.success(res, 200, {
     name: 'Altiverr Webhook Relay API',
     version: '1.0.0',
     status: 'active',

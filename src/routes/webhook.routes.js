@@ -6,6 +6,7 @@ import { verifyCalendlySignature } from '../services/calendly.service.js';
 import { verifySlackSignature } from '../services/slack.service.js';
 // Removed n8n service import - SNS processing now handled by proxy service only
 import logger from '../utils/logger.js';
+import responder from '../utils/responder.js';
 
 const router = express.Router();
 
@@ -28,47 +29,15 @@ const handleWebhookVerification = (req, res) => {
   
   // Return a 200 OK with minimal response
   // This allows Slack to verify the URL and n8n to check health
-  return res.status(200).json({
-    success: true,
-    message: 'Webhook endpoint is active'
-  });
+  return responder.success(res, 200, {}, 'Webhook endpoint is active');
 };
 
 /**
  * More precise detection of webhook types
- * Returns 'slack', 'slack-sns', 'calendly', or null
+ * Returns 'slack', 'calendly', or null
  */
 function detectWebhookType(req) {
-  // First check for SNS message format that contains Slack data
-  if (
-    // Check for SNS format message field
-    req.body?.Message && 
-    typeof req.body.Message === 'string' &&
-    (
-      // Check for SNS user agent
-      req.headers['user-agent']?.includes('Amazon SNS') ||
-      // Or just look for SNS structure in the message
-      req.body.Message.includes('"source":"slack"')
-    )
-  ) {
-    try {
-      // Try to parse and see if it contains slack data
-      const message = JSON.parse(req.body.Message);
-      if (message.data?.metadata?.source === 'slack') {
-        logger.info('Detected SNS message containing Slack data', {
-          headers: req.headers,
-          messageDataKeys: Object.keys(message.data || {})
-        });
-        return 'slack-sns';
-      }
-    } catch (error) {
-      // Not a valid JSON string, continue with other checks
-      logger.warn('SNS Message field contained invalid JSON', {
-        messagePreview: req.body.Message.substring(0, 100),
-        error: error.message
-      });
-    }
-  }
+  // Note: SNS processing removed from API service - handled by proxy only
   
   // SLACK DETECTION - multiple strong indicators
   if (
@@ -108,69 +77,7 @@ function detectWebhookType(req) {
   return null;
 }
 
-/**
- * Extract and process SNS message containing Slack data
- * Special handler for SNS messages that couldn't be handled by the standard Slack controller
- */
-function handleSlackSNS(req, res) {
-  const requestId = `sns_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  
-  logger.info(`[${requestId}] Processing SNS message containing Slack data`, {
-    path: req.path,
-    uuid: req.params.uuid,
-    bodyKeys: Object.keys(req.body)
-  });
-  
-  try {
-    // Extract Slack payload from SNS
-    const slackPayload = extractSlackFromSNS(req.body);
-    
-    if (!slackPayload) {
-      logger.error(`[${requestId}] Failed to extract Slack payload from SNS message`, {
-        messagePreview: req.body.Message?.substring(0, 150)
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: 'Could not extract Slack payload from SNS message',
-        id: requestId
-      });
-    }
-    
-    logger.info(`[${requestId}] Successfully extracted Slack payload from SNS`, {
-      payloadKeys: Object.keys(slackPayload),
-      hasEvent: !!slackPayload.event,
-      eventType: slackPayload.event?.type,
-      channel: slackPayload.event?.channel,
-      teamId: slackPayload.team_id
-    });
-    
-    // Replace the original request body with the extracted payload
-    const originalBody = req.body;
-    req.body = slackPayload;
-    
-    // Add SNS tracking info in a special header
-    req.headers['x-sns-extracted'] = 'true';
-    req.headers['x-sns-request-id'] = requestId;
-    
-    // Now process with the standard Slack controller
-    logger.info(`[${requestId}] Forwarding extracted Slack payload to Slack controller`);
-    
-    return slackController.handleSlackWebhook(req, res);
-  } catch (error) {
-    logger.error(`[${requestId}] Error processing SNS Slack message`, {
-      error: error.message,
-      stack: error.stack
-    });
-    
-    return res.status(500).json({
-      success: false,
-      message: 'Error processing SNS message',
-      error: error.message,
-      id: requestId
-    });
-  }
-}
+// SNS handling removed - now handled exclusively by proxy service
 
 // n8n specific webhook routes with UUID pattern - exact match to n8n URLs
 // Format: /webhook-test/{uuid}/webhook (development)
@@ -191,9 +98,7 @@ router.post('-test/:uuid/webhook', (req, res) => {
     payloadEvent: req.body?.event
   });
   
-  if (webhookType === 'slack-sns') {
-    return handleSlackSNS(req, res);
-  } else if (webhookType === 'slack') {
+  if (webhookType === 'slack') {
     return slackController.handleSlackWebhook(req, res);
   } else if (webhookType === 'calendly') {
     return calendlyController.handleCalendlyWebhook(req, res);
@@ -224,9 +129,7 @@ router.post('/:uuid/webhook', (req, res) => {
     payloadEvent: req.body?.event
   });
   
-  if (webhookType === 'slack-sns') {
-    return handleSlackSNS(req, res);
-  } else if (webhookType === 'slack') {
+  if (webhookType === 'slack') {
     return slackController.handleSlackWebhook(req, res);
   } else if (webhookType === 'calendly') {
     return calendlyController.handleCalendlyWebhook(req, res);
@@ -255,13 +158,6 @@ router.get('/', handleWebhookVerification);
  * This is the legacy approach, used as fallback
  */
 function routeWebhookBasedOnPayload(req, res) {
-  // Check for SNS message containing Slack data first
-  const webhookType = detectWebhookType(req);
-  if (webhookType === 'slack-sns') {
-    logger.info('Detected SNS message with Slack data, forwarding to SNS Slack handler');
-    return handleSlackSNS(req, res);
-  }
-  
   // Check for Slack webhook signatures
   const isSlack = req.headers['x-slack-signature'] || 
                   req.body?.type === 'event_callback' ||
@@ -298,17 +194,15 @@ function routeWebhookBasedOnPayload(req, res) {
     path: req.path
   });
   
-  return res.status(202).json({
-    message: 'Webhook received but source could not be determined',
-    received: true,
-    timestamp: new Date().toISOString()
-  });
+  return responder.success(res, 202, { 
+    received: true, 
+    timestamp: new Date().toISOString() 
+  }, 'Webhook received but source could not be determined');
 }
 
 // Catch-all route for webhook documentation
 router.get('/', (req, res) => {
-  res.status(200).json({
-    message: 'Webhook API',
+  responder.success(res, 200, {
     endpoints: {
       '/webhook/calendly': 'Endpoint for Calendly webhooks',
       '/webhook/slack': 'Endpoint for Slack webhooks',
@@ -317,7 +211,7 @@ router.get('/', (req, res) => {
       '/{uuid}/webhook': 'n8n production webhook endpoint'
     },
     version: '1.0.0'
-  });
+  }, 'Webhook API');
 });
 
 // Add specific Calendly test endpoint 
@@ -330,10 +224,7 @@ router.post('-test/calendly', calendlyAuthMiddleware, (req, res) => {
 // Add GET method for Calendly test endpoint
 router.get('-test/calendly', (req, res) => {
   logger.info('Received GET verification for Calendly test webhook');
-  return res.status(200).json({
-    success: true,
-    message: 'Calendly test webhook endpoint is active'
-  });
+  return responder.success(res, 200, {}, 'Calendly test webhook endpoint is active');
 });
 
 // Add specific Calendly production endpoint
@@ -346,10 +237,7 @@ router.post('/calendly', calendlyAuthMiddleware, (req, res) => {
 // Add GET method for Calendly production endpoint
 router.get('/calendly', (req, res) => {
   logger.info('Received GET verification for Calendly webhook');
-  return res.status(200).json({
-    success: true,
-    message: 'Calendly webhook endpoint is active'
-  });
+  return responder.success(res, 200, {}, 'Calendly webhook endpoint is active');
 });
 
 export default router; 

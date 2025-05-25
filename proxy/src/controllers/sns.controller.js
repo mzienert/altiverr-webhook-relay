@@ -4,6 +4,7 @@ import logger from '../utils/logger.js';
 import { forwardToN8n, extractSlackFromSNS } from '../services/n8n.service.js';
 import { sendErrorNotification } from '../services/notification.service.js';
 import responder from '../utils/responder.js';
+import { detectWebhookFromRequest } from '../../../shared/utils/webhookDetector.js';
 
 /**
  * Generate a unique trace ID for SNS operations
@@ -465,19 +466,25 @@ export async function handleSnsMessage(req, res) {
         !req.body.Message && 
         !req.body.MessageId) {
       
-      // Special detection for Slack webhooks
-      const isSlack = req.body.type === 'event_callback' || 
-                     req.body.event?.type === 'message' ||
-                     req.body.team_id;
+      // Use centralized webhook detection for direct webhooks
+      const detection = detectWebhookFromRequest(req);
+      
+      logger.info(`[${traceId}] DETECTED DIRECT WEBHOOK (NOT SNS)`, {
+        type: detection.type,
+        confidence: detection.confidence,
+        indicators: detection.indicators,
+        details: detection.details
+      });
                      
-      if (isSlack) {
+      if (detection.type === 'slack') {
         logger.info(`[${traceId}] DETECTED DIRECT SLACK WEBHOOK (NOT SNS)`, {
           type: req.body.type,
           eventType: req.body.event?.type,
           teamId: req.body.team_id,
           channel: req.body.event?.channel,
           user: req.body.event?.user,
-          messageText: req.body.event?.text?.substring(0, 100)
+          messageText: req.body.event?.text?.substring(0, 100),
+          confidence: detection.confidence
         });
         
         // Forward directly to n8n
@@ -501,14 +508,11 @@ export async function handleSnsMessage(req, res) {
         }, 'Direct Slack webhook processed');
       }
       
-      // Special detection for Calendly webhooks
-      const isCalendly = req.body.event?.includes('calendly') ||
-                        req.body.payload?.event_type?.kind === 'calendly';
-                        
-      if (isCalendly) {
+      if (detection.type === 'calendly') {
         logger.info(`[${traceId}] DETECTED DIRECT CALENDLY WEBHOOK (NOT SNS)`, {
           event: req.body.event,
-          uri: req.body.payload?.uri || 'unknown'
+          uri: req.body.payload?.uri || 'unknown',
+          confidence: detection.confidence
         });
         
         // Forward directly to n8n
@@ -530,6 +534,14 @@ export async function handleSnsMessage(req, res) {
           traceId,
           processingTime
         }, 'Direct Calendly webhook processed');
+      }
+      
+      // If detection was uncertain, log and continue with SNS processing
+      if (detection.type === 'unknown') {
+        logger.warn(`[${traceId}] COULD NOT DETECT DIRECT WEBHOOK TYPE`, {
+          confidence: detection.confidence,
+          details: detection.details
+        });
       }
     }
     

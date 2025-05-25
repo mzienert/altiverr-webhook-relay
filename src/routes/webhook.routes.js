@@ -7,6 +7,7 @@ import { verifySlackSignature } from '../services/slack.service.js';
 // Removed n8n service import - SNS processing now handled by proxy service only
 import logger from '../utils/logger.js';
 import responder from '../utils/responder.js';
+import { detectWebhookType, detectWebhookFromRequest } from '../../shared/utils/webhookDetector.js';
 
 const router = express.Router();
 
@@ -20,64 +21,19 @@ router.post('/calendly', calendlyAuthMiddleware, calendlyController.handleCalend
 // Slack webhook route
 router.post('/slack', slackAuthMiddleware, slackController.handleSlackWebhook);
 
-// Function to handle GET requests for webhook verification
+/**
+ * Handle webhook verification (GET requests)
+ * Some services send GET requests to verify webhook endpoints
+ */
 const handleWebhookVerification = (req, res) => {
-  logger.info(`Received verification GET request for: ${req.path}`, {
-    uuid: req.params.uuid,
-    query: req.query
+  logger.info('Webhook verification request received', {
+    path: req.path,
+    query: req.query,
+    userAgent: req.headers['user-agent']
   });
   
-  // Return a 200 OK with minimal response
-  // This allows Slack to verify the URL and n8n to check health
-  return responder.success(res, 200, {}, 'Webhook endpoint is active');
+  return responder.success(res, 200, { verified: true }, 'Webhook endpoint verified');
 };
-
-/**
- * More precise detection of webhook types
- * Returns 'slack', 'calendly', or null
- */
-function detectWebhookType(req) {
-  // Note: SNS processing removed from API service - handled by proxy only
-  
-  // SLACK DETECTION - multiple strong indicators
-  if (
-    // Header-based detection (strongest)
-    req.headers['x-slack-signature'] ||
-    req.headers['x-slack-request-timestamp'] ||
-    
-    // Payload-based detection (strong)
-    req.body?.type === 'event_callback' ||
-    req.body?.type === 'url_verification' ||
-    
-    // User agent detection (weaker)
-    req.headers['user-agent']?.includes('Slackbot')
-  ) {
-    return 'slack';
-  }
-  
-  // CALENDLY DETECTION - multiple strong indicators
-  if (
-    // Header-based detection (strong)
-    req.headers['calendly-webhook-signature'] ||
-    
-    // Payload-based detection (strong)
-    req.body?.event === 'invitee.created' ||
-    req.body?.event === 'invitee.canceled' ||
-    
-    // Structure-based detection
-    (req.body?.event && req.body?.payload?.event_type?.uri) ||
-    
-    // User agent detection (weaker, but specific)
-    req.headers['user-agent']?.includes('Calendly')
-  ) {
-    return 'calendly';
-  }
-  
-  // Could not determine with confidence
-  return null;
-}
-
-// SNS handling removed - now handled exclusively by proxy service
 
 // n8n specific webhook routes with UUID pattern - exact match to n8n URLs
 // Format: /webhook-test/{uuid}/webhook (development)
@@ -87,20 +43,20 @@ router.post('-test/:uuid/webhook', (req, res) => {
     path: req.path
   });
   
-  // Use improved webhook type detection
-  const webhookType = detectWebhookType(req);
+  // Use improved webhook type detection with enhanced logging
+  const detection = detectWebhookFromRequest(req);
   
-  logger.info(`Webhook type detected: ${webhookType || 'unknown'}`, {
+  logger.info(`Webhook detected: ${detection.type} (confidence: ${detection.confidence})`, {
     uuid: req.params.uuid,
-    userAgent: req.headers['user-agent'],
-    contentType: req.headers['content-type'],
-    payloadType: req.body?.type,
-    payloadEvent: req.body?.event
+    type: detection.type,
+    confidence: detection.confidence,
+    indicators: detection.indicators,
+    details: detection.details
   });
   
-  if (webhookType === 'slack') {
+  if (detection.type === 'slack') {
     return slackController.handleSlackWebhook(req, res);
-  } else if (webhookType === 'calendly') {
+  } else if (detection.type === 'calendly') {
     return calendlyController.handleCalendlyWebhook(req, res);
   } else {
     // Forward to generic handler for unidentified webhooks
@@ -118,20 +74,20 @@ router.post('/:uuid/webhook', (req, res) => {
     path: req.path
   });
   
-  // Use improved webhook type detection
-  const webhookType = detectWebhookType(req);
+  // Use improved webhook type detection with enhanced logging
+  const detection = detectWebhookFromRequest(req);
   
-  logger.info(`Webhook type detected: ${webhookType || 'unknown'}`, {
+  logger.info(`Webhook detected: ${detection.type} (confidence: ${detection.confidence})`, {
     uuid: req.params.uuid,
-    userAgent: req.headers['user-agent'],
-    contentType: req.headers['content-type'],
-    payloadType: req.body?.type,
-    payloadEvent: req.body?.event
+    type: detection.type,
+    confidence: detection.confidence,
+    indicators: detection.indicators,
+    details: detection.details
   });
   
-  if (webhookType === 'slack') {
+  if (detection.type === 'slack') {
     return slackController.handleSlackWebhook(req, res);
-  } else if (webhookType === 'calendly') {
+  } else if (detection.type === 'calendly') {
     return calendlyController.handleCalendlyWebhook(req, res);
   } else {
     // Forward to generic handler for unidentified webhooks
@@ -158,45 +114,41 @@ router.get('/', handleWebhookVerification);
  * This is the legacy approach, used as fallback
  */
 function routeWebhookBasedOnPayload(req, res) {
-  // Check for Slack webhook signatures
-  const isSlack = req.headers['x-slack-signature'] || 
-                  req.body?.type === 'event_callback' ||
-                  req.body?.type === 'url_verification';
+  // Use centralized detection with fallback for backward compatibility
+  const detection = detectWebhookFromRequest(req);
   
-  if (isSlack) {
+  logger.info('Legacy webhook routing with centralized detection', {
+    type: detection.type,
+    confidence: detection.confidence,
+    details: detection.details
+  });
+  
+  if (detection.type === 'slack') {
     logger.info('Detected Slack webhook, forwarding to Slack handler');
     return slackController.handleSlackWebhook(req, res);
   }
   
-  // Check if it's a Calendly webhook based on headers or payload
-  const isCalendly = req.headers['user-agent']?.includes('Calendly') || 
-                     req.body?.event?.includes('calendly');
-  
-  if (isCalendly) {
+  if (detection.type === 'calendly') {
     logger.info('Detected Calendly webhook, forwarding to Calendly handler');
     return calendlyController.handleCalendlyWebhook(req, res);
   }
   
   // DEFAULT - Log details to help troubleshoot misrouting
-  logger.warn('Webhook type could not be determined', {
+  logger.warn('Webhook type could not be determined with centralized detector', {
     userAgent: req.headers['user-agent'],
     contentType: req.headers['content-type'],
     path: req.path,
     bodyKeys: Object.keys(req.body || {}).join(','),
     bodyType: req.body?.type,
-    bodyEvent: req.body?.event
+    bodyEvent: req.body?.event,
+    detectionResult: detection
   });
   
   // Default response if we can't determine the webhook source
-  logger.warn('Received webhook but could not determine source', {
-    headers: req.headers,
-    body: req.body,
-    path: req.path
-  });
-  
   return responder.success(res, 202, { 
     received: true, 
-    timestamp: new Date().toISOString() 
+    timestamp: new Date().toISOString(),
+    detection: detection
   }, 'Webhook received but source could not be determined');
 }
 

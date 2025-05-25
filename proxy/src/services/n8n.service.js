@@ -2,6 +2,7 @@ import axios from 'axios';
 import env from '../../config/env.js';
 import logger from '../utils/logger.js';
 import { getWebhookUrl } from '../utils/webhookUrl.js';
+import { detectWebhookSource, detectWebhookFromPayload } from '../../../shared/utils/webhookDetector.js';
 
 /**
  * Generates a consistent ID from a Slack webhook payload
@@ -65,167 +66,6 @@ function generateConsistentWebhookId(data) {
   
   // Fallback: use stringified first 100 chars of payload
   return `webhook_${JSON.stringify(data).slice(0, 100)}`;
-}
-
-/**
- * Detects the type of webhook from the payload data
- * @param {Object} data - The webhook payload data
- * @returns {Object} - Detection result {source, dataType, etc}
- */
-function detectWebhookSource(data) {
-  // Early return if data is empty or invalid
-  if (!data) {
-    return { source: 'unknown', dataType: typeof data, dataKeys: [] };
-  }
-  
-  // Extract all data keys for inspection
-  const dataType = typeof data;
-  const dataKeys = data ? Object.keys(data) : [];
-  
-  // Log initial inspection
-  logger.debug('Inspecting webhook payload for source detection', {
-    dataType,
-    dataKeys: dataKeys.join(', '),
-    sampleData: JSON.stringify(data).substring(0, 200)
-  });
-  
-  // Handle string data (assuming it might be stringified JSON)
-  let parsedData = data;
-  if (dataType === 'string' && data.trim().startsWith('{')) {
-    try {
-      parsedData = JSON.parse(data);
-      logger.debug('Parsed string data to JSON', {
-        dataType: typeof parsedData,
-        dataKeys: Object.keys(parsedData)
-      });
-    } catch (e) {
-      // Not valid JSON string, continue with original data
-    }
-  }
-  
-  // Special handling for Slack
-  // Check for direct Slack message payload structure
-  if (parsedData && typeof parsedData === 'object') {
-    // Look for common Slack API properties
-    const hasSlackType = parsedData.type === 'event_callback' || parsedData.type === 'url_verification';
-    const hasEventField = !!parsedData.event;
-    const hasEventType = parsedData.event?.type === 'message' || parsedData.event?.type === 'app_mention';
-    const hasTeamID = !!parsedData.team_id;
-    const hasChannelField = !!parsedData.event?.channel;
-    
-    // Check if many signs point to this being a Slack webhook
-    if ((hasSlackType && hasEventField) || 
-        (hasEventField && hasEventType && hasTeamID) ||
-        (hasEventField && hasChannelField && hasTeamID)) {
-      logger.debug('Detected Slack webhook through standard structure', {
-        type: parsedData.type,
-        eventType: parsedData.event?.type,
-        hasTeamID,
-        hasChannelField
-      });
-      
-      // Additional check for manual user messages
-      const isUserMessage = parsedData.event?.type === 'message' && 
-                           !parsedData.event?.bot_id && 
-                           parsedData.event?.user;
-                           
-      if (isUserMessage) {
-        logger.info('Detected manual Slack message from user', {
-          user: parsedData.event.user,
-          channel: parsedData.event.channel,
-          text: parsedData.event.text?.substring(0, 50)
-        });
-      }
-      
-      return {
-        source: 'slack',
-        dataType: typeof parsedData,
-        dataKeys,
-        isSNS: false,
-        hasEvent: hasEventField,
-        isManualMessage: isUserMessage
-      };
-    }
-    
-    // Check for Slack webhook inside SNS wrapper (typically includes Message field with nested data)
-    if (parsedData.Message && typeof parsedData.Message === 'string') {
-      try {
-        const innerMessage = JSON.parse(parsedData.Message);
-        
-        // Detect metadata wrapper structure from our SNS implementation
-        if (innerMessage && innerMessage.data && innerMessage.data.metadata) {
-          const hasMetadata = !!innerMessage.data.metadata;
-          const dataKeys = innerMessage.data ? Object.keys(innerMessage.data) : [];
-          
-          logger.debug('Detected potential SNS wrapper structure', {
-            hasMetadata,
-            dataKeys
-          });
-          
-          // Check for Slack-specific metadata within SNS message
-          if (innerMessage.data.metadata.source === 'slack') {
-            logger.debug('Detected Slack webhook through SNS nested structure');
-            
-            // Extract and process the original Slack payload from the SNS data structure
-            const slackPayload = innerMessage.data.payload?.original || {};
-            logger.debug('Extracted Slack original payload from SNS data structure');
-            
-            return {
-              source: 'slack',
-              dataType: typeof slackPayload,
-              dataKeys: Object.keys(slackPayload),
-              isSNS: true,
-              hasEvent: !!slackPayload.event,
-              originalMessage: slackPayload
-            };
-          }
-          
-          // Check for Calendly-specific metadata within SNS message
-          if (innerMessage.data.metadata.source === 'calendly') {
-            logger.debug('Detected Calendly webhook through SNS nested structure');
-            
-            // Extract and process the original Calendly payload
-            const calendlyPayload = innerMessage.data.payload?.original || {};
-            logger.debug('Extracted Calendly original payload from SNS data structure');
-            
-            return {
-              source: 'calendly',
-              dataType: typeof calendlyPayload,
-              dataKeys: Object.keys(calendlyPayload),
-              isSNS: true,
-              hasEvent: false,
-              originalMessage: calendlyPayload
-            };
-          }
-        }
-      } catch (e) {
-        // Not a valid JSON string in Message field, continue with other checks
-      }
-    }
-    
-    // Check for plain Calendly structure (direct webhook)
-    if (parsedData.event === 'invitee.created' || 
-        parsedData.event === 'invitee.canceled' || 
-        (parsedData.payload && parsedData.payload.event_type && parsedData.payload.event_type.kind === 'calendly')) {
-      logger.debug('Detected Calendly webhook through standard structure');
-      return {
-        source: 'calendly',
-        dataType: typeof parsedData,
-        dataKeys,
-        isSNS: false,
-        hasEvent: false
-      };
-    }
-  }
-  
-  // If no specific source detected, return unknown
-  return {
-    source: 'unknown',
-    dataType,
-    dataKeys,
-    isSNS: false,
-    hasEvent: false
-  };
 }
 
 /**
@@ -319,12 +159,19 @@ async function forwardToN8n({ data, id, source }) {
       dataPreview: JSON.stringify(data).substring(0, 300)
     });
     
-    // Detect webhook source if not provided and not already determined from SNS
+    // Use centralized webhook detection if source not provided
     let webhookSource = source ? { source } : detectWebhookSource(data);
     
     if (typeof webhookSource === 'string') {
       webhookSource = { source: webhookSource };
     }
+    
+    logger.info(`[${trackingId}] N8N FORWARD - DETECTION RESULT`, {
+      providedSource: source,
+      detectedSource: webhookSource.source,
+      confidence: webhookSource.confidence || 'legacy',
+      isSNS: webhookSource.isSNS
+    });
     
     // Determine n8n webhook URL based on source
     let n8nWebhookUrl = '';
@@ -369,8 +216,7 @@ async function forwardToN8n({ data, id, source }) {
         ts: payloadToSend.event.ts,
         type: payloadToSend.event.type,
         apiAppId: payloadToSend.api_app_id,
-        channel: payloadToSend.event?.channel,
-        fromSns: false
+        fromSns: webhookSource.isSNS
       });
     }
     
@@ -380,7 +226,7 @@ async function forwardToN8n({ data, id, source }) {
       source: webhookSource.source,
       dataSize: JSON.stringify(payloadToSend).length,
       isSlackUserMessage,
-      fromSns: false
+      fromSns: webhookSource.isSNS
     });
     
     // Prepare headers for forwarding
@@ -391,7 +237,7 @@ async function forwardToN8n({ data, id, source }) {
       'X-Webhook-Type': webhookSource.source,
       'X-Webhook-ID': webhookId,
       'X-Tracking-ID': trackingId,
-      'X-SNS-Extracted': 'false',
+      'X-SNS-Extracted': webhookSource.isSNS ? 'true' : 'false',
       'X-Deduplication-ID': webhookId
     };
     
@@ -409,7 +255,7 @@ async function forwardToN8n({ data, id, source }) {
       url: n8nWebhookUrl,
       responseTime: `${responseTime}ms`,
       isSlackUserMessage,
-      fromSns: false
+      fromSns: webhookSource.isSNS
     });
     
     return {
@@ -432,7 +278,7 @@ async function forwardToN8n({ data, id, source }) {
       statusCode: error.response?.status,
       data: error.response?.data ? JSON.stringify(error.response?.data) : null,
       webhookSource: source || 'unknown',
-      fromSns: false
+      responseTime: `${responseTime}ms`
     });
     
     return {
